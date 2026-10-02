@@ -11,7 +11,7 @@ No agent defaults or saved model selections are migrated.
 | Adapter | Changes from the audit |
 | --- | --- |
 | Codex and the Codex runner catalog | Add GPT-6.1 Sol (`gpt-6.1-sol`). Expose efforts through Ultra and Fast mode, as documented. Keep `gpt-5.6-sol` as the default. |
-| Claude on Bedrock | Add Sonnet 5.5 (`us.anthropic.claude-sonnet-5-5`), using the catalog's existing US inference-profile convention. |
+| Claude on Bedrock | Add Sonnet 5.5 (`us.anthropic.claude-sonnet-5-5`), using the catalog's existing US inference-profile convention. Sonnet 5.5 IDs (direct or Bedrock-qualified) get the documented `xhigh` and `max` efforts and require Claude Code 2.1.284 or later on the CLI lane. |
 | OpenCode | Add `openai/gpt-6.1-sol` and `anthropic/claude-sonnet-5-5` to the static fallback used by remote environments. Both IDs are present in the OpenCode model registry. |
 | Claude Code (direct) | No change in this audit. [#14816](https://github.com/paperclipai/paperclip/pull/14816) adds Sonnet 5.5 (`claude-sonnet-5-5`, Claude Code 2.1.284 or later) and refreshes the Claude runtime. |
 | Grok Build, Gemini CLI, Kimi Code, Cursor | No new verified model IDs. Grok 4.7, Gemini 3.8 Flash, and Kimi K3 remain the newest documented models. |
@@ -52,7 +52,8 @@ minimum stays fixed. See
   the integrity-verified `@openai/codex@0.160.0-linux-x64` archive.
 - [Claude Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview)
   documents the Bedrock ID `anthropic.claude-sonnet-5-5` and the September 28,
-  2026 release. [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview)
+  2026 release. The [Claude Code changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md)
+  entry for 2.1.284 adds `claude-sonnet-5-5`, so that version is the CLI minimum. [Models overview](https://platform.claude.com/docs/en/about-claude/models/overview)
   lists `xhigh` and `max` effort support for the 5.5 generation.
 - [OpenCode releases](https://github.com/anomalyco/opencode/releases)
   1.18.33 and 1.18.34 contain fixes only. The OpenCode model registry at
