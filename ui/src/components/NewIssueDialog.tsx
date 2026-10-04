@@ -12,6 +12,7 @@ import { projectsApi } from "../api/projects";
 import { agentsApi } from "../api/agents";
 import { accessApi } from "../api/access";
 import { authApi } from "../api/auth";
+import { assetsApi } from "../api/assets";
 import { buildCompanyUserInlineOptions, buildMarkdownMentionOptions, isAgentTaskTarget } from "../lib/company-members";
 import { queryKeys } from "../lib/queryKeys";
 import {
@@ -280,6 +281,7 @@ export function NewIssueDialog() {
   const { pushToast } = useToastActions();
   const { enabled: streamlinedUiEnabled } = useStreamlinedUiEnabled();
   const [title, setTitle] = useState("");
+  const [hasTitle, setHasTitle] = useState(false);
   const [description, setDescription] = useState("");
   const titleRef = useRef("");
   const descriptionRef = useRef("");
@@ -440,6 +442,7 @@ export function NewIssueDialog() {
   }, []);
 
   const setIssueText = useCallback((nextTitle: string, nextDescription: string) => {
+    setHasTitle(Boolean(nextTitle));
     titleRef.current = nextTitle;
     descriptionRef.current = nextDescription;
     setTitle(nextTitle);
@@ -1034,6 +1037,11 @@ export function NewIssueDialog() {
               placeholder="Describe a task…"
               mobile={isMobile}
               mentions={mentionOptions}
+              onImageUpload={async (file) => {
+                if (!effectiveCompanyId) throw new Error("No organization selected");
+                const asset = await assetsApi.uploadImage(effectiveCompanyId, file, "issues/drafts");
+                return asset.contentPath;
+              }}
               companyId={effectiveCompanyId}
               enableReassign
               reassignOptions={assigneeOptions}
@@ -1063,9 +1071,21 @@ export function NewIssueDialog() {
                 runSettings: composerSettings,
                 onRunSettingsChange: setComposerSettings,
                 header:
-                  title.trim() || isSubIssueMode ? (
+                  hasTitle || isSubIssueMode ? (
                     <div className="mb-3 flex flex-col gap-2 text-xs">
-                      {title.trim() ? <span className="truncate text-foreground">{title}</span> : null}
+                      {hasTitle ? (
+                        <input
+                          aria-label="Task title"
+                          value={title}
+                          disabled={createIssue.isPending}
+                          className="w-full bg-transparent text-sm text-foreground outline-none"
+                          onChange={(event) => {
+                            titleRef.current = event.target.value;
+                            setTitle(event.target.value);
+                            queueDraftSave({ title: event.target.value });
+                          }}
+                        />
+                      ) : null}
                       {isSubIssueMode ? (
                         <div className="px-4 pb-2">
                           <div className="max-w-full rounded-md border border-border bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground">

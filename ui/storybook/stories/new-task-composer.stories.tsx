@@ -19,7 +19,7 @@ const REQUEST = "Review the sign-in flow and fix the redirect after a session ex
 function NewTaskStory({
   scenario = "empty",
 }: {
-  scenario?: "empty" | "prefilled" | "subtask" | "planning" | "error" | "saving";
+  scenario?: "empty" | "prefilled" | "title" | "subtask" | "planning" | "error" | "saving";
 }) {
   const client = useQueryClient();
   const { selectedCompanyId, setSelectedCompanyId } = useCompany();
@@ -29,11 +29,19 @@ function NewTaskStory({
 
   useLayoutEffect(() => {
     const originalFetch = window.fetch;
+    const imageUrls: string[] = [];
     window.fetch = async (input, init) => {
       const url = new URL(
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
         location.origin,
       );
+      if (url.pathname === `/api/companies/${COMPANY_ID}/assets/images` && init?.method === "POST") {
+        const file = init.body instanceof FormData ? init.body.get("file") : null;
+        if (!(file instanceof File)) return Response.json({ error: "Select an image" }, { status: 400 });
+        const contentPath = URL.createObjectURL(file);
+        imageUrls.push(contentPath);
+        return Response.json({ contentPath });
+      }
       if (url.pathname === `/api/companies/${COMPANY_ID}/issues` && init?.method === "POST") {
         if (scenario === "saving") return new Promise<Response>(() => {});
         if (scenario === "error")
@@ -56,6 +64,7 @@ function NewTaskStory({
     };
     return () => {
       window.fetch = originalFetch;
+      imageUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [scenario]);
 
@@ -88,7 +97,7 @@ function NewTaskStory({
       enableIsolatedWorkspaces: true,
     });
     client.setQueryData(
-      queryKeys.executionWorkspaces.list(COMPANY_ID, {
+      queryKeys.executionWorkspaces.summaryList(COMPANY_ID, {
         projectId: "project-board-ui",
         projectWorkspaceId: "workspace-board-ui",
         reuseEligible: true,
@@ -100,6 +109,7 @@ function NewTaskStory({
         ? {}
         : {
             description: REQUEST,
+            ...(scenario === "title" ? { title: "Fix the sign-in redirect" } : {}),
             assigneeAgentId: "agent-codex",
             projectId: "project-board-ui",
             projectWorkspaceId: "workspace-board-ui",
@@ -158,6 +168,7 @@ export const Empty: Story = {
   },
 };
 export const Prefilled: Story = { args: { scenario: "prefilled" } };
+export const InheritedTitle: Story = { args: { scenario: "title" } };
 export const Planning: Story = { args: { scenario: "planning" } };
 export const SubTask: Story = { args: { scenario: "subtask" } };
 export const ProjectPicker: Story = {

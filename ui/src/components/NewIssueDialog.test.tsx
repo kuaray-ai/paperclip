@@ -273,10 +273,10 @@ async function flush() {
   });
 }
 
-async function typeTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+async function typeTextareaValue(textarea: HTMLTextAreaElement | HTMLInputElement, value: string) {
   await act(async () => {
     const valueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype,
+      textarea instanceof HTMLInputElement ? window.HTMLInputElement.prototype : window.HTMLTextAreaElement.prototype,
       "value",
     )?.set;
     valueSetter?.call(textarea, value);
@@ -862,6 +862,24 @@ describe("NewIssueDialog", () => {
     await flush();
     expect(mockIssuesApi.create).toHaveBeenCalledWith("company-1", expect.objectContaining({ description: "Investigate the sign-in redirect and fix it" }));
     expect(mockIssuesApi.create.mock.calls[0][1]).not.toHaveProperty("title");
+    await act(async () => root.unmount());
+  });
+
+  it.each(["Corrected task title", ""])("lets users edit or clear an inherited title (%s)", async (nextTitle) => {
+    dialogState.newIssueDefaults = { title: "Suggested title", description: "Investigate the redirect" };
+    const { root } = renderDialog(container);
+    await flush();
+    const titleInput = container.querySelector<HTMLInputElement>('input[aria-label="Task title"]')!;
+    expect(titleInput.value).toBe("Suggested title");
+    await typeTextareaValue(titleInput, nextTitle);
+    expect(container.querySelector('input[aria-label="Task title"]')).toBe(titleInput);
+    const submit = container.querySelector<HTMLButtonElement>('[aria-label="Create task"]')!;
+    await act(async () => submit.click());
+    await flush();
+    const payload = mockIssuesApi.create.mock.calls[0][1];
+    expect(payload.description).toBe("Investigate the redirect");
+    if (nextTitle) expect(payload.title).toBe(nextTitle);
+    else expect(payload).not.toHaveProperty("title");
     await act(async () => root.unmount());
   });
 

@@ -821,9 +821,16 @@ export function TaskChatComposer({
     const files = Array.from(evt.clipboardData?.files ?? []);
     if (files.length === 0) return;
     if (creation) {
+      if (onImageUpload) {
+        const nonImages = files.filter((file) => !file.type.startsWith("image/"));
+        if (nonImages.length === 0) return;
+        creation.onSelectFiles(nonImages);
+        if (nonImages.length !== files.length) return;
+      } else {
+        creation.onSelectFiles(files);
+      }
       evt.preventDefault();
       evt.stopPropagation();
-      creation.onSelectFiles(files);
       return;
     }
     const nonImages = files.filter((file) => !file.type.startsWith("image/"));
@@ -870,7 +877,7 @@ export function TaskChatComposer({
   async function submit() {
     if (disabled || (pause && !canResetPausedConversation)) return;
     if (creation) {
-      if (submittingRef.current || (!bodyRef.current.trim() && !creation.canSubmitWithoutBody)) return;
+      if (submittingRef.current || uploadPending || uploadFailed || (!bodyRef.current.trim() && !creation.canSubmitWithoutBody)) return;
       submittingRef.current = true;
       setSubmitting(true);
       setActionError(null);
@@ -1340,7 +1347,7 @@ export function TaskChatComposer({
               }] : [goalCommandOption]}
               onSubmit={() => void submit()}
               imageUploadHandler={
-                canAcceptFiles && !creation ? uploadInlineImage : undefined
+                canAcceptFiles && (!creation || onImageUpload) ? uploadInlineImage : undefined
               }
               onDropFile={canAcceptFiles && !creation ? attachNonImageFile : undefined}
               bordered={false}
