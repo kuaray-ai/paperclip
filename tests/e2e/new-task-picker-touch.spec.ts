@@ -9,6 +9,13 @@ async function json(response: APIResponse) {
 async function swipeToLastOption(page: Page, picker: Locator) {
   const list = picker.getByRole("listbox");
   const last = list.getByRole("option").last();
+  // The shared picker animates its height between views. Native touch
+  // coordinates must use the settled sheet rather than its clipped first frame.
+  await expect.poll(() => picker.evaluate((element) => {
+    const body = element.querySelector(".composer-run-settings-height");
+    return [...element.getAnimations(), ...(body?.getAnimations() ?? [])]
+      .every((animation) => animation.playState !== "running");
+  })).toBe(true);
   // visualViewport resize updates React state after the browser viewport changes.
   await expect.poll(async () => {
     const bounds = (await picker.boundingBox())!;
