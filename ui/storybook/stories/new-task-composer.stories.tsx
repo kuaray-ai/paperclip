@@ -406,7 +406,10 @@ export const RichChips: Story = {
     for (const kind of ["agent", "user", "project", "issue", "skill", "routine"]) {
       await waitFor(() => expect(composer.querySelector(`[data-mention-kind="${kind}"]`)).toBeVisible());
     }
-    await expect(composer.querySelector('[data-mention-kind="agent"]')).toHaveAttribute("style", expect.stringContaining("--paperclip-mention-avatar-image"));
+    const agentChip = composer.querySelector('[data-mention-kind="agent"]')!;
+    await expect(agentChip).toHaveAttribute("style", expect.stringContaining("--paperclip-mention-avatar-image"));
+    await expect(canvasElement.ownerDocument.defaultView!.getComputedStyle(agentChip, "::before").backgroundImage)
+      .toContain(new URL("./agent-avatar-images/", canvasElement.ownerDocument.baseURI).href);
   },
 };
 
