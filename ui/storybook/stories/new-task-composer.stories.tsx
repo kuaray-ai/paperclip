@@ -382,6 +382,7 @@ export const MentionPicker: Story = {
     await expect(within(menu).getByText("Product Lead")).toBeVisible();
     await expect(within(menu).getByText("Board UI")).toBeVisible();
     await expect(within(menu).getByText("PAP-1602")).toBeVisible();
+    await expect(menu.getBoundingClientRect().right).toBeLessThanOrEqual(canvasElement.ownerDocument.defaultView!.innerWidth);
   },
 };
 
@@ -389,9 +390,11 @@ export const SlashCommands: Story = {
   play: async ({ canvasElement }) => {
     const page = within(canvasElement.ownerDocument.body);
     await userEvent.type(await page.findByRole("textbox", { name: "editable markdown" }), "/");
-    const menu = within(await page.findByTestId("mention-autocomplete-menu"));
+    const menuElement = await page.findByTestId("mention-autocomplete-menu");
+    const menu = within(menuElement);
     await expect(menu.getByText("/test-it-for-real")).toBeVisible();
     await expect(menu.getByText("/routine:Daily check-in")).toBeVisible();
+    await expect(menuElement.getBoundingClientRect().right).toBeLessThanOrEqual(canvasElement.ownerDocument.defaultView!.innerWidth);
   },
 };
 
