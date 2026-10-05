@@ -15,11 +15,19 @@ import {
 
 const COMPANY_ID = "company-storybook";
 const REQUEST = "Review the sign-in flow and fix the redirect after a session expires.";
+const WORKTREES = [
+  { ...storybookExecutionWorkspaces[0]!, name: "Sign-in redirect", branchName: "codex/sign-in-redirect" },
+  { ...storybookExecutionWorkspaces[0]!, id: "worktree-settings", name: "Settings polish", branchName: "codex/settings-polish", cwd: `${storybookExecutionWorkspaces[0]!.cwd}-settings` },
+];
 
 function NewTaskStory({
   scenario = "empty",
+  worktrees = "ready",
+  isolation = true,
 }: {
   scenario?: "empty" | "prefilled" | "title" | "subtask" | "planning" | "error" | "saving";
+  worktrees?: "ready" | "reuse" | "empty" | "loading" | "error";
+  isolation?: boolean;
 }) {
   const client = useQueryClient();
   const { selectedCompanyId, setSelectedCompanyId } = useCompany();
@@ -35,6 +43,11 @@ function NewTaskStory({
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
         location.origin,
       );
+      if (url.pathname === `/api/companies/${COMPANY_ID}/execution-workspaces`) {
+        if (worktrees === "loading") return new Promise<Response>(() => {});
+        if (worktrees === "error") return Response.json({ error: "Worktrees unavailable" }, { status: 503 });
+        return Response.json(worktrees === "empty" || url.searchParams.get("projectId") !== "project-board-ui" ? [] : WORKTREES);
+      }
       if (url.pathname === `/api/companies/${COMPANY_ID}/assets/images` && init?.method === "POST") {
         const file = init.body instanceof FormData ? init.body.get("file") : null;
         if (!(file instanceof File)) return Response.json({ error: "Select an image" }, { status: 400 });
@@ -66,7 +79,7 @@ function NewTaskStory({
       window.fetch = originalFetch;
       imageUrls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [scenario]);
+  }, [scenario, worktrees]);
 
   useLayoutEffect(() => {
     if (selectedCompanyId !== COMPANY_ID) {
@@ -76,6 +89,7 @@ function NewTaskStory({
     if (opened.current) return;
     opened.current = true;
     localStorage.removeItem("paperclip:issue-draft");
+    client.setQueryData(queryKeys.health, { hiddenSettings: [] });
     client.setQueryData(queryKeys.auth.session, storybookAuthSession);
     client.setQueryData(
       queryKeys.agents.list(COMPANY_ID),
@@ -92,17 +106,20 @@ function NewTaskStory({
       { id: "gpt-6-sol", label: "GPT-6 Sol" },
       { id: "gpt-6-astra", label: "GPT-6 Astra" },
     ]);
-    client.setQueryData(queryKeys.projects.list(COMPANY_ID), storybookProjects);
+    client.setQueryData(queryKeys.projects.list(COMPANY_ID), isolation ? storybookProjects : storybookProjects.map((project) => ({
+      ...project, executionWorkspacePolicy: { ...project.executionWorkspacePolicy, enabled: false },
+    })));
     client.setQueryData(queryKeys.instance.experimentalSettings, {
       enableIsolatedWorkspaces: true,
     });
-    client.setQueryData(
-      queryKeys.executionWorkspaces.summaryList(COMPANY_ID, {
-        projectId: "project-board-ui",
-        projectWorkspaceId: "workspace-board-ui",
-        reuseEligible: true,
-      }),
-      storybookExecutionWorkspaces,
+    const worktreeQueryKey = queryKeys.executionWorkspaces.summaryList(COMPANY_ID, {
+      projectId: "project-board-ui",
+      reuseEligible: true,
+    });
+    client.removeQueries({ queryKey: worktreeQueryKey, exact: true });
+    if (worktrees !== "loading" && worktrees !== "error") client.setQueryData(
+      worktreeQueryKey,
+      worktrees === "empty" ? [] : WORKTREES,
     );
     openNewIssue(
       scenario === "empty"
@@ -114,17 +131,19 @@ function NewTaskStory({
             projectId: "project-board-ui",
             projectWorkspaceId: "workspace-board-ui",
             workMode: scenario === "planning" ? "planning" : "standard",
+            ...(worktrees === "reuse" ? { executionWorkspaceId: WORKTREES[0]!.id } : {}),
             ...(scenario === "subtask"
               ? {
                   parentId: "issue-storybook-1",
                   parentIdentifier: "PAP-203",
                   parentTitle: "Improve sign-in reliability",
-                  executionWorkspaceId: storybookExecutionWorkspaces[0]?.id,
+                  executionWorkspaceId: WORKTREES[0]!.id,
+                  parentExecutionWorkspaceLabel: WORKTREES[0]!.name,
                 }
               : {}),
           },
     );
-  }, [client, openNewIssue, scenario, selectedCompanyId, setSelectedCompanyId]);
+  }, [client, isolation, openNewIssue, scenario, selectedCompanyId, setSelectedCompanyId, worktrees]);
 
   return (
     <div className="min-h-screen bg-background p-8 text-foreground">
@@ -133,6 +152,8 @@ function NewTaskStory({
           <p>Task created</p>
           <p>{String(submitted.description ?? submitted.title)}</p>
           <p>Mode: {String(submitted.workMode)}</p>
+          <p>Worktrees: {String(submitted.executionWorkspacePreference ?? "Project default")}</p>
+          {submitted.executionWorkspaceId ? <p>Reused: {String(submitted.executionWorkspaceId)}</p> : null}
         </div>
       ) : null}
       <NewIssueDialog />
@@ -151,7 +172,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The production new-task dialog renders TaskChatComposer: the same editor, add menu, work modes, assignee/model/effort picker, and send button as an existing task. Project sits in the bottom toolbar immediately before the assignee. Creation is mocked locally; no agents run.",
+          "The production new-task dialog renders TaskChatComposer. An inset bar shared with queued messages holds the colored project picker and, for projects with isolation enabled, Worktrees. Choose a new worktree or reuse a project worktree. The editor, add menu, work modes, assignee/model/effort picker, and send button are shared with task chat. Creation is mocked locally; no agents run.",
       },
     },
   },
@@ -249,5 +270,63 @@ export const MobileProjectPicker: Story = {
 };
 export const MobileModelPicker: Story = {
   ...ModelPicker,
+  globals: { viewport: { value: "mobile", isRotated: false } },
+};
+
+export const WorktreePicker: Story = {
+  args: { scenario: "prefilled" },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await page.findByRole("combobox", { name: "Worktrees" }));
+    await expect(page.getByPlaceholderText("Search worktrees...")).toBeVisible();
+    await expect(page.getByRole("option", { name: /New worktree/ })).toBeVisible();
+    await expect(page.getByRole("option", { name: /Sign-in redirect/ })).toBeVisible();
+  },
+};
+export const ReuseWorktree: Story = {
+  args: { scenario: "prefilled", worktrees: "reuse" },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement.ownerDocument.body);
+    await expect(await page.findByRole("combobox", { name: "Worktrees" })).toHaveTextContent("Sign-in redirect");
+  },
+};
+export const CreateWithReusedWorktree: Story = {
+  args: { scenario: "prefilled" },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await page.findByRole("combobox", { name: "Worktrees" }));
+    await userEvent.type(page.getByPlaceholderText("Search worktrees..."), "settings");
+    await userEvent.click(await page.findByRole("option", { name: /Settings polish/ }));
+    await expect(page.getByRole("combobox", { name: "Worktrees" })).toHaveTextContent("Settings polish");
+    await userEvent.click(page.getByRole("button", { name: "Create task" }));
+    await expect(await page.findByRole("status")).toHaveTextContent("Worktrees: reuse_existing");
+    await expect(page.getByRole("status")).toHaveTextContent("Reused: worktree-settings");
+  },
+};
+export const EmptyWorktrees: Story = { ...WorktreePicker, args: { scenario: "prefilled", worktrees: "empty" }, play: async ({ canvasElement }) => {
+  const page = within(canvasElement.ownerDocument.body);
+  await userEvent.click(await page.findByRole("combobox", { name: "Worktrees" }));
+  await expect(page.getByText(/No existing worktrees yet/)).toBeVisible();
+  await expect(page.getByRole("option", { name: /New worktree/ })).toBeVisible();
+} };
+export const LoadingWorktrees: Story = { ...EmptyWorktrees, args: { scenario: "prefilled", worktrees: "loading" }, play: async ({ canvasElement }) => {
+  const page = within(canvasElement.ownerDocument.body);
+  await userEvent.click(await page.findByRole("combobox", { name: "Worktrees" }));
+  await expect(page.getByText("Loading existing worktrees…")).toBeVisible();
+  await expect(page.getByRole("option", { name: /New worktree/ })).toBeVisible();
+} };
+export const WorktreeError: Story = { ...EmptyWorktrees, args: { scenario: "prefilled", worktrees: "error" }, play: async ({ canvasElement }) => {
+  const page = within(canvasElement.ownerDocument.body);
+  await userEvent.click(await page.findByRole("combobox", { name: "Worktrees" }));
+  await expect(await page.findByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(page.getByRole("option", { name: /New worktree/ })).toBeVisible();
+} };
+export const IsolationDisabled: Story = { args: { scenario: "prefilled", isolation: false }, play: async ({ canvasElement }) => {
+  const page = within(canvasElement.ownerDocument.body);
+  await expect(await page.findByRole("button", { name: "Board UI" })).toBeVisible();
+  await expect(page.queryByRole("combobox", { name: "Worktrees" })).not.toBeInTheDocument();
+} };
+export const MobileWorktreePicker: Story = {
+  ...WorktreePicker,
   globals: { viewport: { value: "mobile", isRotated: false } },
 };

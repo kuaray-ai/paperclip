@@ -191,11 +191,13 @@ vi.mock("./InlineEntitySelector", async () => {
         placeholder?: string;
         className?: string;
         triggerDataSlot?: string;
+        options?: { id: string; label: string }[];
+        onChange?: (id: string) => void;
         renderTriggerValue?: (option: { id: string; label: string } | null) => ReactNode;
       }
-    >(function InlineEntitySelectorMock({ value, placeholder, className, triggerDataSlot, renderTriggerValue }, ref) {
+    >(function InlineEntitySelectorMock({ value, placeholder, className, triggerDataSlot, renderTriggerValue, options = [], onChange }, ref) {
       return (
-        <button ref={ref} type="button" className={className} data-slot={triggerDataSlot}>
+        <button ref={ref} type="button" className={className} data-slot={triggerDataSlot} onClick={() => onChange?.(options[options.findIndex((option) => option.id === value) + 1]?.id ?? "")}>
           {(renderTriggerValue?.(value ? { id: value, label: value } : null) ?? value) || placeholder}
         </button>
       );
@@ -439,10 +441,13 @@ describe("NewIssueDialog", () => {
     expect(composer?.textContent).not.toContain("PAP");
     await waitForAssertion(() => expect(composer?.querySelector('[data-testid="task-chat-composer-assignee"]')).not.toBeNull());
     const toolbar = composer?.querySelector('[data-testid="task-chat-composer-actions"]');
-    const project = toolbar?.querySelector('[data-slot="new-issue-compact-control"]');
+    const context = container.querySelector('[data-testid="task-chat-composer-context"]');
+    const project = context?.querySelector('[data-slot="new-issue-compact-control"]');
     const assignee = toolbar?.querySelector('[data-testid="task-chat-composer-assignee"]');
     expect(project).not.toBeNull();
-    expect(project?.nextElementSibling?.contains(assignee ?? null)).toBe(true);
+    expect(context?.nextElementSibling).toBe(composer);
+    expect(assignee).not.toBeNull();
+    expect(toolbar?.querySelector('[data-slot="new-issue-compact-control"]')).toBeNull();
     act(() => root.unmount());
   });
 
@@ -489,7 +494,6 @@ describe("NewIssueDialog", () => {
     await waitForAssertion(() => {
       expect(mockExecutionWorkspacesApi.listSummaries).toHaveBeenCalledWith("company-1", {
         projectId: "project-1",
-        projectWorkspaceId: undefined,
         reuseEligible: true,
       });
     });
@@ -801,7 +805,7 @@ describe("NewIssueDialog", () => {
 
     await waitForAssertion(() => {
       expect(queryClient.getQueryData(queryKeys.executionWorkspaces.summaryList("company-1", {
-        projectId: "project-1", projectWorkspaceId: "project-workspace-2", reuseEligible: true,
+        projectId: "project-1", reuseEligible: true,
       }))).toEqual(expect.arrayContaining([expect.objectContaining({ id: "workspace-1" })]));
     });
     await flush();
@@ -831,6 +835,129 @@ describe("NewIssueDialog", () => {
       }),
     );
 
+    act(() => root.unmount());
+  });
+
+  function enableWorktrees(mode = "shared_workspace") {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: true });
+    mockProjectsApi.list.mockResolvedValue([
+      { id: "project-1", name: "Alpha", executionWorkspacePolicy: { enabled: true, defaultMode: mode }, workspaces: [{ id: "source-1", isPrimary: true }] },
+      { id: "project-2", name: "Beta", executionWorkspacePolicy: { enabled: false }, workspaces: [] },
+    ]);
+    dialogState.newIssueDefaults = { projectId: "project-1", description: "Fix sign-in" };
+  }
+
+  function selectWorktree(value: string) {
+    const option = container.querySelector<HTMLElement>(`[cmdk-item][data-value="${value}"]`);
+    expect(option).not.toBeNull();
+    act(() => option!.click());
+  }
+
+  it.each(["isolated_workspace", "operator_branch", "adapter_managed"])("reuses a worktree with its actual mode (%s)", async (mode) => {
+    enableWorktrees();
+    mockExecutionWorkspacesApi.listSummaries.mockResolvedValue([{
+      id: "worktree-1", name: "Sign-in fix", mode, status: "active", branchName: "fix/sign-in",
+      cwd: "/tmp/worktree-1", projectWorkspaceId: "source-1", lastUsedAt: new Date(),
+    }]);
+    const { root } = renderDialog(container);
+    await waitForAssertion(() => expect(container.querySelector('[cmdk-item][data-value="reuse:worktree-1"]')).not.toBeNull());
+    const context = container.querySelector('[data-testid="task-chat-composer-context"]');
+    const project = context?.querySelector('[data-slot="new-issue-compact-control"]');
+    const worktrees = context?.querySelector('[aria-label="Worktrees"]');
+    expect(worktrees).not.toBeNull();
+    expect(project?.compareDocumentPosition(worktrees!)! & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    selectWorktree("reuse:worktree-1");
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Create task"]')!.click());
+    await waitForAssertion(() => expect(mockIssuesApi.create).toHaveBeenCalled());
+    expect(mockIssuesApi.create.mock.calls[0][1]).toMatchObject({
+      projectId: "project-1", projectWorkspaceId: "source-1", executionWorkspaceId: "worktree-1",
+      executionWorkspacePreference: "reuse_existing",
+      executionWorkspaceSettings: { mode: mode === "adapter_managed" ? "agent_default" : mode },
+    });
+    act(() => root.unmount());
+  });
+
+  it("creates a new worktree and clears the previously reused id", async () => {
+    enableWorktrees();
+    dialogState.newIssueDefaults.executionWorkspaceId = "worktree-1";
+    mockExecutionWorkspacesApi.listSummaries.mockResolvedValue([{
+      id: "worktree-1", name: "Sign-in fix", mode: "isolated_workspace", status: "idle",
+      branchName: "fix/sign-in", cwd: "/tmp/worktree-1", projectWorkspaceId: "source-1", lastUsedAt: new Date(),
+    }]);
+    const { root } = renderDialog(container);
+    await flush();
+    selectWorktree("isolated_workspace");
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Create task"]')!.click());
+    await waitForAssertion(() => expect(mockIssuesApi.create).toHaveBeenCalled());
+    const payload = mockIssuesApi.create.mock.calls[0][1];
+    expect(payload).toMatchObject({ executionWorkspacePreference: "isolated_workspace", executionWorkspaceSettings: { mode: "isolated_workspace" } });
+    expect(payload).not.toHaveProperty("executionWorkspaceId");
+    act(() => root.unmount());
+  });
+
+  it.each([false, true])("carries the source checkout when reusing another worktree in the same project (inherited: %s)", async (inherited) => {
+    enableWorktrees();
+    if (inherited) dialogState.newIssueDefaults.executionWorkspaceId = "worktree-secondary";
+    mockExecutionWorkspacesApi.listSummaries.mockResolvedValue([{
+      id: "worktree-secondary", name: "Secondary checkout fix", mode: "isolated_workspace", status: "active",
+      branchName: "fix/secondary", cwd: "/tmp/worktree-secondary", projectWorkspaceId: "source-2", lastUsedAt: new Date(),
+    }]);
+    const { root } = renderDialog(container);
+    await waitForAssertion(() => expect(container.querySelector('[cmdk-item][data-value="reuse:worktree-secondary"]')).not.toBeNull());
+    expect(mockExecutionWorkspacesApi.listSummaries).toHaveBeenCalledWith("company-1", { projectId: "project-1", reuseEligible: true });
+    if (!inherited) selectWorktree("reuse:worktree-secondary");
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Create task"]')!.click());
+    await waitForAssertion(() => expect(mockIssuesApi.create).toHaveBeenCalled());
+    expect(mockIssuesApi.create.mock.calls[0][1]).toMatchObject({ projectWorkspaceId: "source-2", executionWorkspaceId: "worktree-secondary" });
+    act(() => root.unmount());
+  });
+
+  it("clears a reused worktree when switching to a project without isolation", async () => {
+    enableWorktrees();
+    dialogState.newIssueDefaults.executionWorkspaceId = "worktree-1";
+    const { root } = renderDialog(container);
+    await flush();
+    act(() => container.querySelector<HTMLButtonElement>('[data-slot="new-issue-compact-control"]')!.click());
+    await flush();
+    expect(container.querySelector('[aria-label="Worktrees"]')).toBeNull();
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Create task"]')!.click());
+    await waitForAssertion(() => expect(mockIssuesApi.create).toHaveBeenCalled());
+    const payload = mockIssuesApi.create.mock.calls[0][1];
+    expect(payload.projectId).toBe("project-2");
+    expect(payload).not.toHaveProperty("executionWorkspaceId");
+    expect(payload).not.toHaveProperty("executionWorkspacePreference");
+    expect(payload).not.toHaveProperty("executionWorkspaceSettings");
+    act(() => root.unmount());
+  });
+
+  it.each([false, true])("hides worktrees and skips reuse queries when the project has isolation disabled (instance: %s)", async (instanceEnabled) => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: instanceEnabled });
+    dialogState.newIssueDefaults = { projectId: "project-1" };
+    const { root } = renderDialog(container);
+    await flush();
+    expect(container.querySelector('[aria-label="Worktrees"]')).toBeNull();
+    expect(mockExecutionWorkspacesApi.listSummaries).not.toHaveBeenCalled();
+    act(() => root.unmount());
+  });
+
+  it.each(["loading", "error", "missing"])("blocks an unchecked reused worktree but still permits a new one (%s)", async (state) => {
+    enableWorktrees();
+    dialogState.newIssueDefaults.executionWorkspaceId = "stale-worktree";
+    if (state === "loading") mockExecutionWorkspacesApi.listSummaries.mockImplementation(() => new Promise(() => {}));
+    if (state === "error") mockExecutionWorkspacesApi.listSummaries.mockRejectedValue(new Error("Unavailable"));
+    const { root } = renderDialog(container);
+    await waitForAssertion(() => expect(container.querySelector('[aria-label="Worktrees"]')).not.toBeNull());
+    await flush();
+    const submit = container.querySelector<HTMLButtonElement>('[aria-label="Create task"]')!;
+    expect(submit.disabled).toBe(true);
+    act(() => { container.querySelector('textarea')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true })); });
+    expect(mockIssuesApi.create).not.toHaveBeenCalled();
+    selectWorktree("isolated_workspace");
+    await flush();
+    expect(submit.disabled).toBe(false);
+    act(() => submit.click());
+    await waitForAssertion(() => expect(mockIssuesApi.create).toHaveBeenCalled());
+    expect(mockIssuesApi.create.mock.calls[0][1]).toMatchObject({ executionWorkspacePreference: "isolated_workspace" });
     act(() => root.unmount());
   });
 

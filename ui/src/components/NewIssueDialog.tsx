@@ -31,10 +31,11 @@ import { useToastActions } from "../context/ToastContext";
 import { assigneeValueFromSelection, currentUserAssigneeOption, parseAssigneeValue } from "../lib/assignees";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Paperclip, FileText, Flag, PauseCircle, ListTree, X, ShieldAlert } from "lucide-react";
+import { Paperclip, FileText, Flag, PauseCircle, ListTree, X, ShieldAlert, Folder, ChevronDown } from "lucide-react";
 import { cn } from "../lib/utils";
 import type { MentionOption } from "./MarkdownEditor";
 import { TaskChatComposer } from "./task-chat/TaskChatComposer";
+import { ComposerWorktreePicker } from "./task-chat/ComposerWorktreePicker";
 import { TaskChatPresentationProvider } from "./task-chat/presentation-mode";
 import { mergeComposerRunSettings, type ComposerRunSettings } from "./task-chat/composer-run-settings";
 import { useSidebar } from "../context/SidebarContext";
@@ -326,20 +327,6 @@ export function NewIssueDialog() {
     queryFn: () => projectsApi.list(effectiveCompanyId!),
     enabled: !!effectiveCompanyId && newIssueOpen,
   });
-  const { data: reusableExecutionWorkspaces } = useQuery({
-    queryKey: queryKeys.executionWorkspaces.summaryList(effectiveCompanyId!, {
-      projectId,
-      projectWorkspaceId: projectWorkspaceId || undefined,
-      reuseEligible: true,
-    }),
-    queryFn: () =>
-      executionWorkspacesApi.listSummaries(effectiveCompanyId!, {
-        projectId,
-        projectWorkspaceId: projectWorkspaceId || undefined,
-        reuseEligible: true,
-      }),
-    enabled: Boolean(effectiveCompanyId) && newIssueOpen && Boolean(projectId) && workspaceIsolationControlsVisible,
-  });
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
@@ -361,6 +348,28 @@ export function NewIssueDialog() {
     projects: activeProjects,
     companyId: effectiveCompanyId,
     userId: currentUserId,
+  });
+  const currentProject = orderedProjects.find((project) => project.id === projectId);
+  const currentProjectExecutionWorkspacePolicy =
+    experimentalSettings?.enableIsolatedWorkspaces === true ? (currentProject?.executionWorkspacePolicy ?? null) : null;
+  const currentProjectSupportsExecutionWorkspace = Boolean(currentProjectExecutionWorkspacePolicy?.enabled);
+  const canChooseWorktrees = workspaceIsolationControlsVisible && currentProjectSupportsExecutionWorkspace;
+  const {
+    data: reusableExecutionWorkspaces,
+    isPending: worktreesLoading,
+    isError: worktreesError,
+    refetch: refetchWorktrees,
+  } = useQuery({
+    queryKey: queryKeys.executionWorkspaces.summaryList(effectiveCompanyId!, {
+      projectId,
+      reuseEligible: true,
+    }),
+    queryFn: () => executionWorkspacesApi.listSummaries(effectiveCompanyId!, {
+      projectId,
+      reuseEligible: true,
+    }),
+    enabled: Boolean(effectiveCompanyId) && newIssueOpen && canChooseWorktrees,
+    retry: false,
   });
 
   const selectedAssignee = useMemo(() => parseAssigneeValue(assigneeValue), [assigneeValue]);
@@ -720,7 +729,7 @@ export function NewIssueDialog() {
   async function handleSubmit(body: string, mode: IssueWorkMode, settings: ComposerRunSettings | null) {
     const currentTitle = titleRef.current.trim();
     const currentDescription = body.trim();
-    if (!effectiveCompanyId || (!currentTitle && !currentDescription) || createIssue.isPending) return;
+    if (!effectiveCompanyId || (!currentTitle && !currentDescription) || createIssue.isPending || worktreeSelectionIncomplete) return;
     const inheritedOverrides = buildAssigneeAdapterOverrides({
       adapterType: assigneeAdapterType,
       lane: assigneeChrome ? "custom" : assigneeModelLane,
@@ -744,6 +753,9 @@ export function NewIssueDialog() {
     const executionWorkspaceSettings = executionWorkspacePolicy?.enabled
       ? { mode: requestedExecutionWorkspaceMode }
       : null;
+    const requestedProjectWorkspaceId = canChooseWorktrees && executionWorkspaceMode === "reuse_existing" && selectedReusableExecutionWorkspace
+      ? selectedReusableExecutionWorkspace.projectWorkspaceId
+      : projectWorkspaceId;
     // A task launched from a workspace (or its parent task) keeps that explicit
     // context. Draft-only choices are ignored while the selector is hidden.
     const contextualWorkspaceId =
@@ -770,10 +782,10 @@ export function NewIssueDialog() {
       ...(newIssueDefaults.parentId ? { parentId: newIssueDefaults.parentId } : {}),
       ...(newIssueDefaults.goalId ? { goalId: newIssueDefaults.goalId } : {}),
       ...(projectId ? { projectId } : {}),
-      ...(projectWorkspaceId ? { projectWorkspaceId } : {}),
+      ...(requestedProjectWorkspaceId ? { projectWorkspaceId: requestedProjectWorkspaceId } : {}),
       ...(assigneeAdapterOverrides ? { assigneeAdapterOverrides } : {}),
       ...(executionWorkspacePolicy?.enabled ? { executionWorkspacePreference: executionWorkspaceMode } : {}),
-      ...(workspaceIsolationControlsVisible &&
+      ...(canChooseWorktrees &&
       executionWorkspaceMode === "reuse_existing" &&
       selectedExecutionWorkspaceId
         ? { executionWorkspaceId: selectedExecutionWorkspaceId }
@@ -855,7 +867,6 @@ export function NewIssueDialog() {
 
   const currentAssignee = selectedAssigneeAgentId ? (agents ?? []).find((a) => a.id === selectedAssigneeAgentId) : null;
   const currentAssigneeLowTrust = getTrustPreset(currentAssignee?.permissions) === "low_trust_review";
-  const currentProject = orderedProjects.find((project) => project.id === projectId);
   const neededUserSecretKeys = useMemo(() => {
     if (!shouldWarnAboutRunUserSecrets(status, selectedAssigneeAgentId)) return [];
     return uniqueRequiredUserSecretKeys([
@@ -863,10 +874,10 @@ export function NewIssueDialog() {
       currentProject?.env ?? null,
     ]);
   }, [currentAssignee?.adapterConfig, currentProject?.env, selectedAssigneeAgentId, status]);
-  const currentProjectExecutionWorkspacePolicy =
-    experimentalSettings?.enableIsolatedWorkspaces === true ? (currentProject?.executionWorkspacePolicy ?? null) : null;
-  const currentProjectSupportsExecutionWorkspace = Boolean(currentProjectExecutionWorkspacePolicy?.enabled);
   const selectableReusableWorkspaces = reusableExecutionWorkspaces ?? [];
+  const selectedReusableWorktree = selectableReusableWorkspaces.find((workspace) => workspace.id === selectedExecutionWorkspaceId);
+  const worktreeSelectionIncomplete = canChooseWorktrees && executionWorkspaceMode === "reuse_existing"
+    && (worktreesLoading || worktreesError || !selectedReusableWorktree);
   const isUsingParentExecutionWorkspace =
     isSubIssueMode && parentExecutionWorkspaceId
       ? executionWorkspaceMode === "reuse_existing" && selectedExecutionWorkspaceId === parentExecutionWorkspaceId
@@ -1104,6 +1115,12 @@ export function NewIssueDialog() {
                   ) : undefined,
                 details: (
                   <>
+                    {worktreeSelectionIncomplete && !worktreesLoading ? (
+                      <p role="alert" className="mb-2 text-xs text-destructive">
+                        {worktreesError ? "Couldn't check the selected worktree. Retry in Worktrees or choose New worktree."
+                          : "The selected worktree is no longer available. Choose another worktree or start a new one."}
+                      </p>
+                    ) : null}
                     {stagedFiles.length > 0 ? (
                       <div className="mt-4 space-y-3 rounded-lg border border-border/70 p-3">
                         {stagedDocuments.length > 0 ? (
@@ -1237,50 +1254,73 @@ export function NewIssueDialog() {
                     ) : null}
                   </>
                 ),
-                projectSelector: (
-                  <InlineEntitySelector
-                    value={projectId}
-                    options={projectOptions}
-                    recentOptionIds={recentProjectIds}
-                    placeholder="Project"
-                    mobileTitle="Select project"
-                    className="h-8 min-w-0 max-w-24 shrink-0 gap-1.5 border-0 bg-transparent px-2 text-xs shadow-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-0 sm:max-w-40"
-                    disabled={createIssue.isPending}
-                    triggerDataSlot="new-issue-compact-control"
-                    contentStyle={entityPickerViewportStyle}
-                    noneLabel="No project"
-                    searchPlaceholder="Search projects..."
-                    emptyMessage="No projects found."
-                    onChange={handleProjectChange}
-                    renderTriggerValue={(option) =>
-                      option && currentProject ? (
-                        <>
-                          <span
-                            className="h-3.5 w-3.5 shrink-0 rounded-sm"
-                            style={{
-                              backgroundColor: currentProject.color ?? "var(--project-seed)",
-                            }}
-                          />
-                          <span className="truncate">{option.label}</span>
-                        </>
-                      ) : (
-                        <span className="truncate text-muted-foreground">Project</span>
-                      )
-                    }
-                    renderOption={(option) => {
-                      if (!option.id) return <span className="truncate">{option.label}</span>;
-                      const project = orderedProjects.find((item) => item.id === option.id);
-                      return (
-                        <>
-                          <span
-                            className="h-3.5 w-3.5 shrink-0 rounded-sm"
-                            style={{ backgroundColor: project?.color ?? "var(--project-seed)" }}
-                          />
-                          <span className="truncate">{option.label}</span>
-                        </>
-                      );
-                    }}
-                  />
+                submitDisabled: worktreeSelectionIncomplete,
+                contextBar: (
+                  <>
+                    <InlineEntitySelector
+                      value={projectId}
+                      options={projectOptions}
+                      recentOptionIds={recentProjectIds}
+                      placeholder="Project"
+                      mobileTitle="Select project"
+                      className="h-8 min-w-0 flex-1 gap-1.5 border-0 bg-transparent px-2 text-xs shadow-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-0 sm:max-w-64 sm:flex-none"
+                      disabled={createIssue.isPending}
+                      triggerDataSlot="new-issue-compact-control"
+                      contentStyle={entityPickerViewportStyle}
+                      noneLabel="No project"
+                      noneAtEnd
+                      searchPlaceholder="Search projects..."
+                      emptyMessage="No projects found."
+                      onChange={handleProjectChange}
+                      renderTriggerValue={(option) =>
+                        option && currentProject ? (
+                          <>
+                            <Folder className="size-3.5 shrink-0" style={{ color: currentProject.color ?? "var(--project-seed)" }} aria-hidden />
+                            <span className="truncate">{option.label}</span>
+                            <ChevronDown className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+                          </>
+                        ) : (
+                          <>
+                            <Folder className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                            <span className="truncate text-muted-foreground">Project</span>
+                            <ChevronDown className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+                          </>
+                        )
+                      }
+                      renderOption={(option) => {
+                        if (!option.id) return <><Folder className="size-4 shrink-0 text-muted-foreground" aria-hidden /><span className="truncate">{option.label}</span></>;
+                        const project = orderedProjects.find((item) => item.id === option.id);
+                        return (
+                          <>
+                            <Folder className="size-4 shrink-0" style={{ color: project?.color ?? "var(--project-seed)" }} aria-hidden />
+                            <span className="truncate">{option.label}</span>
+                          </>
+                        );
+                      }}
+                    />
+                    {canChooseWorktrees ? (
+                      <ComposerWorktreePicker
+                        mode={executionWorkspaceMode}
+                        workspaceId={selectedExecutionWorkspaceId}
+                        selectedWorkspaceLabel={selectedReusableWorktree?.name ?? (selectedExecutionWorkspaceId === parentExecutionWorkspaceId ? newIssueDefaults.parentExecutionWorkspaceLabel : undefined)}
+                        workspaces={selectableReusableWorkspaces}
+                        onChange={(mode, workspaceId) => {
+                          setExecutionWorkspaceMode(mode);
+                          setSelectedExecutionWorkspaceId(workspaceId);
+                          if (workspaceId) {
+                            const workspace = selectableReusableWorkspaces.find((entry) => entry.id === workspaceId);
+                            if (workspace) setProjectWorkspaceId(workspace.projectWorkspaceId ?? "");
+                          }
+                        }}
+                        loading={worktreesLoading}
+                        error={worktreesError}
+                        onRetry={() => void refetchWorktrees()}
+                        disabled={createIssue.isPending}
+                        mobile={isMobile}
+                        contentStyle={entityPickerViewportStyle}
+                      />
+                    ) : null}
+                  </>
                 ),
               }}
             />

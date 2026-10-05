@@ -62,6 +62,7 @@ import { TaskChatComposerTakeoverActionsContext } from "./TaskChatComposerTakeov
 
 import { TaskChatPausedTakeover, type TaskComposerPause } from "./TaskChatPausedTakeover";
 import { ComposerRunSettingsPicker } from "./ComposerRunSettingsPicker";
+import { TaskChatComposerBar } from "./TaskChatComposerBar";
 import { ComposerAddMenu, ComposerModeChip } from "./ComposerAddMenu";
 import type { ComposerRunSettings } from "./composer-run-settings";
 import type { Agent, IssueAssigneeAdapterOverrides } from "@paperclipai/shared";
@@ -106,7 +107,8 @@ interface TaskChatComposerProps {
     canSubmitWithoutBody?: boolean;
     header?: ReactNode;
     details?: ReactNode;
-    projectSelector?: ReactNode;
+    contextBar?: ReactNode;
+    submitDisabled?: boolean;
     onSelectFiles: (files: File[]) => void;
     runSettings: ComposerRunSettings | null;
     onRunSettingsChange: (settings: ComposerRunSettings | null) => void;
@@ -877,7 +879,7 @@ export function TaskChatComposer({
   async function submit() {
     if (disabled || (pause && !canResetPausedConversation)) return;
     if (creation) {
-      if (submittingRef.current || uploadPending || uploadFailed || (!bodyRef.current.trim() && !creation.canSubmitWithoutBody)) return;
+      if (submittingRef.current || uploadPending || uploadFailed || creation.submitDisabled || (!bodyRef.current.trim() && !creation.canSubmitWithoutBody)) return;
       submittingRef.current = true;
       setSubmitting(true);
       setActionError(null);
@@ -1178,7 +1180,7 @@ export function TaskChatComposer({
   }
 
   return (
-    <div className="flex min-w-0 flex-col gap-2">
+    <div className={cn("flex min-w-0 flex-col", creation?.contextBar ? "gap-0" : "gap-2")}>
       {takeoverVisible && takeover ? (
         <section
           className={cn(
@@ -1241,6 +1243,16 @@ export function TaskChatComposer({
             <div className="mt-3 flex items-center justify-end gap-2">{takeoverSkipButton}</div>
           ) : null}
         </section>
+      ) : null}
+      {creation?.contextBar ? (
+        <TaskChatComposerBar
+          className="flex h-11 min-w-0 items-center gap-2 px-2.5"
+          data-testid="task-chat-composer-context"
+          role="group"
+          aria-label="Task project and worktrees"
+        >
+          {creation.contextBar}
+        </TaskChatComposerBar>
       ) : null}
       <div
         className={cn(
@@ -1467,8 +1479,6 @@ export function TaskChatComposer({
 
             <div className={cn("ml-auto flex min-w-0 max-w-full items-center gap-2", mobile && !queuedEdit && "flex-1 justify-end")}>
 
-            {creation?.projectSelector}
-
             {showAssignee && !queuedEdit && companyId && modelAgents ? (
               <ComposerRunSettingsPicker
                 companyId={companyId}
@@ -1562,6 +1572,7 @@ export function TaskChatComposer({
                     !!uncertainSubmission ||
                     uploadPending ||
                     uploadFailed ||
+                    Boolean(creation?.submitDisabled) ||
                     (body.trim().length === 0 && attachedRefs.length === 0 && !creation?.canSubmitWithoutBody)
               }
               title={

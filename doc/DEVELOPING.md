@@ -148,11 +148,17 @@ The Agent Chat stories share the same component fixture.
 
 Use **Composer → New task** to review task creation through the production
 `TaskChatComposer`. The editor, file menu, work modes, assignee/model picker,
-and send control are shared with task chat. Project sits in the bottom toolbar
-immediately before the assignee. Task creation uses the selected company and has
+and send control are shared with task chat. An inset bar above the composer uses
+the queued-message container and holds Project on the left. Its searchable picker
+shows project colors. Worktrees sits beside Project when the selected project has
+isolation enabled. Choose a new worktree, reuse an eligible worktree from that
+project, or keep the shared project workspace. Reuse carries the worktree's source
+checkout, including a non-primary checkout. Changing projects clears the
+previous worktree choice. Task creation uses the selected company and has
 no separate heading or settings control.
 Stories cover empty and prefilled drafts, sub-tasks, planning, files, saving,
-retryable failures, creation, light theme, and mobile. Story submissions use local
+retryable failures, creation, light theme, and mobile, plus worktree reuse,
+loading, empty, error, and isolation-disabled states. Story submissions use local
 fixtures and never start an agent.
 
 Use **Composer → Model and effort picker** to review harness-specific model
