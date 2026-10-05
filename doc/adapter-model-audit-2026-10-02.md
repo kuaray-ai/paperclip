@@ -13,7 +13,7 @@ No agent defaults or saved model selections are migrated.
 | Codex and the Codex runner catalog | Add GPT-6.1 Sol (`gpt-6.1-sol`). Expose efforts through Ultra and Fast mode, as documented. Keep `gpt-5.6-sol` as the default. |
 | Claude on Bedrock | Add Sonnet 5.5 (`us.anthropic.claude-sonnet-5-5`), using the catalog's existing US inference-profile convention. Sonnet 5.5 IDs (direct or Bedrock-qualified) get the documented `xhigh` and `max` efforts and require Claude Code 2.1.284 or later on the CLI lane. |
 | OpenCode | Add `openai/gpt-6.1-sol` and `anthropic/claude-sonnet-5-5` to the static fallback used by remote environments. Both IDs are present in the OpenCode model registry. |
-| Claude Code (direct) | No change in this audit. [#14816](https://github.com/paperclipai/paperclip/pull/14816) adds Sonnet 5.5 (`claude-sonnet-5-5`, Claude Code 2.1.284 or later) and refreshes the Claude runtime. |
+| Claude Code (direct) | No change in this audit. [#14993](https://github.com/paperclipai/paperclip/pull/14993) (merged October 5, 2026, superseding #14816) adds Sonnet 5.5 (`claude-sonnet-5-5`, Claude Code 2.1.284 or later) and refreshes the Claude runtime. |
 | Grok Build, Gemini CLI, Kimi Code, Cursor | No new verified model IDs. Grok 4.7, Gemini 3.8 Flash, and Kimi K3 remain the newest documented models. |
 
 ## Harness changes
@@ -27,7 +27,7 @@ No agent defaults or saved model selections are migrated.
 | Kimi Code CLI | 2.0.2 | 2.1.1 |
 | Cursor CLI | 2026.09.18-9a7762b | 2026.10.01-e373342 |
 | GitHub CLI | 2.101.0 | 2.102.0 |
-| Claude Agent SDK / Claude Code | 0.3.280 / 2.1.280 | Unchanged here; see #14816 |
+| Claude Agent SDK / Claude Code | 0.3.280 / 2.1.280 | 0.3.286 / 2.1.286 via #14993 (merged); this branch keeps that pin |
 | Hermes | 0.19.0 | 0.19.0 (current) |
 | ACPX, `claude-agent-acp`, `codex-acp` bridges | 0.13.1 / 0.73.0 / 1.6.2 | Unchanged; separately qualified |
 | Pi (`@earendil-works/pi-coding-agent`) | 0.87.1 (fleet image) | Unchanged; Pi 1.0 is qualified upstream in the Pi runner stack |
