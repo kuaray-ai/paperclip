@@ -45,6 +45,7 @@ const toastState = vi.hoisted(() => ({
 }));
 
 const mockIssuesApi = vi.hoisted(() => ({
+  list: vi.fn(),
   create: vi.fn(),
   upsertDocument: vi.fn(),
   uploadAttachment: vi.fn(),
@@ -354,6 +355,7 @@ describe("NewIssueDialog", () => {
     dialogContentState.onPointerDownOutside = null;
     toastState.pushToast.mockReset();
     mockIssuesApi.create.mockReset();
+    mockIssuesApi.list.mockReset().mockResolvedValue([]);
     mockIssuesApi.upsertDocument.mockReset();
     mockIssuesApi.uploadAttachment.mockReset();
     mockExecutionWorkspacesApi.list.mockReset();

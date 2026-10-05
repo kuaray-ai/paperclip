@@ -1,7 +1,17 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  appearanceForPalette,
+  buildAgentMentionHref,
+  buildIssueReferenceHref,
+  buildProjectMentionHref,
+  buildRoutineMentionHref,
+  buildSkillMentionHref,
+  buildUserMentionHref,
+} from "@paperclipai/shared";
+import { MarkdownBody } from "@/components/MarkdownBody";
 import { NewIssueDialog } from "@/components/NewIssueDialog";
 import { useCompany } from "@/context/CompanyContext";
 import { useDialog } from "@/context/DialogContext";
@@ -11,10 +21,18 @@ import {
   storybookAuthSession,
   storybookExecutionWorkspaces,
   storybookProjects,
+  storybookIssues,
 } from "../fixtures/paperclipData";
 
 const COMPANY_ID = "company-storybook";
 const REQUEST = "Review the sign-in flow and fix the redirect after a session expires.";
+const SKILLS = [{ id: "skill-test-drive", key: "test-it-for-real", slug: "test-it-for-real", name: "Test it for real", description: "Walk through the feature in the browser." }];
+const ROUTINES = [{ id: "routine-daily-check", title: "Daily check-in", status: "active" }];
+const RICH_REQUEST = [
+  `Ask [@CodexCoder](${buildAgentMentionHref("agent-codex", "code")}) and [@QAChecker](${buildAgentMentionHref("agent-qa", "shield")}) to review [@Board UI](${buildProjectMentionHref("project-board-ui", storybookProjects[0]!.color)}).`,
+  `Check [PAP-1602](${buildIssueReferenceHref("PAP-1602")}) with [@Product Lead](${buildUserMentionHref("user-product")}) using [/test-it-for-real](${buildSkillMentionHref(SKILLS[0]!.id, SKILLS[0]!.slug)}).`,
+  `Use [/routine:Daily check-in](${buildRoutineMentionHref(ROUTINES[0]!.id)}) as the checklist.`,
+].join("\n\n");
 const WORKTREES = [
   { ...storybookExecutionWorkspaces[0]!, name: "Sign-in redirect", branchName: "codex/sign-in-redirect" },
   { ...storybookExecutionWorkspaces[0]!, id: "worktree-settings", name: "Settings polish", branchName: "codex/settings-polish", projectWorkspaceId: "workspace-release-local", cwd: `${storybookExecutionWorkspaces[0]!.cwd}-settings` },
@@ -25,7 +43,7 @@ function NewTaskStory({
   worktrees = "ready",
   isolation = true,
 }: {
-  scenario?: "empty" | "prefilled" | "title" | "subtask" | "planning" | "error" | "saving";
+  scenario?: "empty" | "prefilled" | "title" | "subtask" | "planning" | "error" | "saving" | "rich";
   worktrees?: "ready" | "reuse" | "empty" | "loading" | "error";
   isolation?: boolean;
 }) {
@@ -43,6 +61,8 @@ function NewTaskStory({
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
         location.origin,
       );
+      if (url.pathname === `/api/companies/${COMPANY_ID}/skills`) return Response.json(SKILLS);
+      if (url.pathname === `/api/companies/${COMPANY_ID}/routines`) return Response.json(ROUTINES);
       if (url.pathname === `/api/companies/${COMPANY_ID}/execution-workspaces`) {
         if (worktrees === "loading") return new Promise<Response>(() => {});
         if (worktrees === "error") return Response.json({ error: "Worktrees unavailable" }, { status: 503 });
@@ -98,8 +118,9 @@ function NewTaskStory({
           ? {
               ...agent,
               adapterConfig: { ...agent.adapterConfig, model: "gpt-6-sol" },
+              appearance: appearanceForPalette("electric-grove"),
             }
-          : agent,
+          : { ...agent, appearance: appearanceForPalette("pink-lemonade") },
       ),
     );
     client.setQueryData(queryKeys.agents.adapterModels(COMPANY_ID, "codex_local"), [
@@ -109,6 +130,9 @@ function NewTaskStory({
     client.setQueryData(queryKeys.projects.list(COMPANY_ID), isolation ? storybookProjects : storybookProjects.map((project) => ({
       ...project, executionWorkspacePolicy: { ...project.executionWorkspacePolicy, enabled: false },
     })));
+    client.setQueryData(queryKeys.issues.mentionPool(COMPANY_ID), storybookIssues);
+    client.setQueryData(queryKeys.companySkills.list(COMPANY_ID), SKILLS);
+    client.setQueryData(queryKeys.routines.list(COMPANY_ID), ROUTINES);
     client.setQueryData(queryKeys.instance.experimentalSettings, {
       enableIsolatedWorkspaces: true,
     });
@@ -125,7 +149,7 @@ function NewTaskStory({
       scenario === "empty"
         ? {}
         : {
-            description: REQUEST,
+            description: scenario === "rich" ? RICH_REQUEST : REQUEST,
             ...(scenario === "title" ? { title: "Fix the sign-in redirect" } : {}),
             assigneeAgentId: "agent-codex",
             projectId: "project-board-ui",
@@ -150,7 +174,7 @@ function NewTaskStory({
       {submitted ? (
         <div role="status" className="mt-4 space-y-2">
           <p>Task created</p>
-          <p>{String(submitted.description ?? submitted.title)}</p>
+          <MarkdownBody>{String(submitted.description ?? submitted.title)}</MarkdownBody>
           <p>Mode: {String(submitted.workMode)}</p>
           <p>Worktrees: {String(submitted.executionWorkspacePreference ?? "Project default")}</p>
           <p>Checkout: {String(submitted.projectWorkspaceId ?? "None")}</p>
@@ -173,7 +197,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The production new-task dialog renders TaskChatComposer. An inset bar shared with queued messages holds the colored project picker and, for projects with isolation enabled, Worktrees. Choose a new worktree or reuse a project worktree. The editor, add menu, work modes, assignee/model/effort picker, and send button are shared with task chat. Creation is mocked locally; no agents run.",
+          "The production new-task dialog renders TaskChatComposer. An inset bar shared with queued messages holds the colored project picker and, for projects with isolation enabled, Worktrees. Choose a new worktree or reuse a project worktree. The shared editor supports agent, person, project, and task mentions plus skill and routine slash-command chips. Agent mentions show the agent's current avatar. The editor, add menu, work modes, assignee/model/effort picker, and send button are shared with task chat. Creation is mocked locally; no agents run.",
       },
     },
   },
@@ -346,3 +370,87 @@ export const MobileWorktreePicker: Story = {
   ...WorktreePicker,
   globals: { viewport: { value: "mobile", isRotated: false } },
 };
+
+export const MentionPicker: Story = {
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement.ownerDocument.body);
+    const editor = await page.findByRole("textbox", { name: "editable markdown" });
+    await userEvent.type(editor, "@");
+    const menu = await page.findByTestId("mention-autocomplete-menu");
+    await expect(within(menu).getByText("CodexCoder")).toBeVisible();
+    await expect(menu.querySelector('[data-slot="agent-avatar"] img')).toBeVisible();
+    await expect(within(menu).getByText("Product Lead")).toBeVisible();
+    await expect(within(menu).getByText("Board UI")).toBeVisible();
+    await expect(within(menu).getByText("PAP-1602")).toBeVisible();
+  },
+};
+
+export const SlashCommands: Story = {
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement.ownerDocument.body);
+    await userEvent.type(await page.findByRole("textbox", { name: "editable markdown" }), "/");
+    const menu = within(await page.findByTestId("mention-autocomplete-menu"));
+    await expect(menu.getByText("/test-it-for-real")).toBeVisible();
+    await expect(menu.getByText("/routine:Daily check-in")).toBeVisible();
+  },
+};
+
+export const RichChips: Story = {
+  args: { scenario: "rich" },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement.ownerDocument.body);
+    const composer = await page.findByTestId("task-chat-composer-input");
+    for (const kind of ["agent", "user", "project", "issue", "skill", "routine"]) {
+      await waitFor(() => expect(composer.querySelector(`[data-mention-kind="${kind}"]`)).toBeVisible());
+    }
+    await expect(composer.querySelector('[data-mention-kind="agent"]')).toHaveAttribute("style", expect.stringContaining("--paperclip-mention-avatar-image"));
+  },
+};
+
+export const CreateWithRichChips: Story = {
+  args: { scenario: "rich" },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await page.findByRole("button", { name: "Create task" }));
+    const receipt = await page.findByRole("status");
+    await expect(receipt).toHaveTextContent("Task created");
+    await expect(receipt).toHaveTextContent("/test-it-for-real");
+    await expect(receipt).toHaveTextContent("/routine:Daily check-in");
+    await expect(receipt.querySelector('[data-mention-kind="agent"]')).toHaveAttribute("style", expect.stringContaining("electric-grove"));
+  },
+};
+
+export const InsertRichChips: Story = {
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement.ownerDocument.body);
+    const editor = await page.findByRole("textbox", { name: "editable markdown" });
+    await userEvent.click(editor);
+    for (const [query, option] of [
+      ["@Codex", /CodexCoder/],
+      [" @Product", /Product Lead/],
+      [" @Board UI", /Board UI/],
+      [" @PAP-1602", /PAP-1602/],
+      [" /test-it", /test-it-for-real/],
+      [" /routine:Daily", /routine:Daily check-in/],
+    ] as const) {
+      await waitFor(() => expect(editor).toHaveFocus());
+      await userEvent.keyboard(query);
+      const menu = within(await page.findByTestId("mention-autocomplete-menu"));
+      await userEvent.click(await menu.findByRole("button", { name: option }));
+    }
+    await waitFor(() => expect(editor).toHaveFocus());
+    await userEvent.keyboard(" Please review these together.");
+    await userEvent.click(page.getByRole("button", { name: "Create task" }));
+    const receipt = await page.findByRole("status");
+    await expect(receipt).toHaveTextContent("Please review these together.");
+    for (const kind of ["agent", "user", "project", "skill", "routine"]) {
+      await expect(receipt.querySelector(`[data-mention-kind="${kind}"]`)).toBeVisible();
+    }
+    await expect(within(receipt).getByRole("link", { name: "Issue PAP-1602" })).toBeVisible();
+  },
+};
+
+export const MobileMentionPicker: Story = { ...MentionPicker, globals: { viewport: { value: "mobile", isRotated: false } } };
+export const MobileSlashCommands: Story = { ...SlashCommands, globals: { viewport: { value: "mobile", isRotated: false } } };
+export const MobileRichChips: Story = { ...RichChips, globals: { viewport: { value: "mobile", isRotated: false } } };
+export const MobileInsertRichChips: Story = { ...InsertRichChips, globals: { viewport: { value: "mobile", isRotated: false } } };

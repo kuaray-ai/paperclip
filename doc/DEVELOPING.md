@@ -103,6 +103,12 @@ pnpm build-storybook
 
 These run the `@paperclipai/ui` Storybook on port `6006` and build the static output to `ui/storybook-static/`.
 
+**Composer → New task** includes agent/user/project/task mentions, skill and
+routine slash commands, and populated rich chips on desktop and mobile. Agent
+mentions use the same avatars in suggestions, inserted chips, and the mocked
+creation receipt. The creation stories preserve the original Markdown references;
+they do not create real tasks or run agents.
+
 Use **Components → Agent setup prompt** to review the shared setup handoff:
 hover/focus logo motion, one-click copying with a prompt preview, animated
 confirmation, and manual-copy recovery. Opening the preview copies immediately;

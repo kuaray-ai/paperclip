@@ -327,6 +327,16 @@ export function NewIssueDialog() {
     queryFn: () => projectsApi.list(effectiveCompanyId!),
     enabled: !!effectiveCompanyId && newIssueOpen,
   });
+  const { data: mentionIssues } = useQuery({
+    queryKey: queryKeys.issues.mentionPool(effectiveCompanyId!),
+    queryFn: () => issuesApi.list(effectiveCompanyId!, {
+      limit: 100,
+      sortField: "updated",
+      sortDir: "desc",
+    }),
+    enabled: Boolean(effectiveCompanyId) && newIssueOpen,
+    staleTime: 60_000,
+  });
   const { data: session } = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
@@ -386,8 +396,9 @@ export function NewIssueDialog() {
       agents,
       projects: orderedProjects,
       members: companyMembers?.users,
+      issues: mentionIssues,
     });
-  }, [agents, companyMembers?.users, orderedProjects]);
+  }, [agents, companyMembers?.users, orderedProjects, mentionIssues]);
 
   const createIssue = useMutation({
     mutationFn: async ({
