@@ -8,14 +8,23 @@ const tool = { qualified_name: "Notion.ListPages", toolkit: { name: "Notion" }, 
 describe("aggregator inventory adapters", () => {
   it("paginates Arcade, scopes the user and exposed tools, preserves distinct accounts, and strips credentials", async () => {
     const request = vi.fn(async (path: string) => path.startsWith("/v1/tools") ? { items: [tool, { ...tool, toolkit: { name: "Private" }, qualified_name: "Private.Read" }] }
-      : path.includes("offset=100") ? { items: [account("last"), account("foreign", "u2")], total: 102 }
-      : { items: Array.from({ length: 100 }, (_, index) => account(String(index))), total: 102 });
+      : path.includes("offset=100") ? { items: [account("last"), account("foreign", "u2")], total_count: 102, offset: 0 }
+      : { items: Array.from({ length: 100 }, (_, index) => account(String(index))), total_count: 102, offset: 100 });
     const apps = await discoverArcadeApps({ request, userId: "u1", gatewayTools: ["Notion_ListPages"] });
     expect(apps).toHaveLength(1);
     expect(apps[0].accounts).toHaveLength(101);
     expect(apps[0].accounts[0]).toMatchObject({ appSlug: "notion", status: "ACTIVE", alias: "Work" });
     expect(JSON.stringify(apps)).not.toContain("do-not-store");
     expect(request.mock.calls[0][0]).toContain("user[id]=u1");
+  });
+  it("uses Arcade's next offset after a short page and rejects truncated final pages", async () => {
+    const request = vi.fn(async (path: string) => path.startsWith("/v1/tools") ? { items: [tool], total_count: 1, offset: 0 }
+      : path.includes("offset=1") ? { items: [account("second")], total_count: 2, offset: 0 }
+      : { items: [account("first")], total_count: 2, offset: 1 });
+    expect((await discoverArcadeApps({ request, userId: "u1", gatewayTools: ["Notion.ListPages"] }))[0].accounts).toHaveLength(2);
+    expect(request.mock.calls.some(([path]) => path.includes("offset=1"))).toBe(true);
+    await expect(discoverArcadeApps({ userId: "u1", gatewayTools: ["Notion.ListPages"], request: async path => path.startsWith("/v1/tools")
+      ? { items: [tool], total_count: 1, offset: 0 } : { items: [account("one")], total_count: 2, offset: 0 } })).rejects.toThrow("Incomplete");
   });
   it("rejects an Arcade partial page rather than returning an authoritative empty inventory", async () => {
     for (const items of [[], [account("one")]]) await expect(discoverArcadeApps({ userId: "u1", gatewayTools: ["Notion.ListPages"], request: async path => path.startsWith("/v1/tools") ? { items: [tool] } : { items, total: 10 } })).rejects.toThrow("Incomplete");

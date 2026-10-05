@@ -30,15 +30,26 @@ export function inventoryPayload(value: unknown, depth = 0): Record<string, unkn
 
 async function pages(request: JsonRequest, path: string): Promise<Record<string, unknown>[]> {
   const result: Record<string, unknown>[] = [];
-  for (let offset = 0; offset < 10_000; offset += 100) {
+  let offset = 0;
+  for (let pageIndex = 0; pageIndex < 100; pageIndex++) {
     const page = record(await request(`${path}${path.includes("?") ? "&" : "?"}limit=100&offset=${offset}`));
     if (!Array.isArray(page.items) || page.items.some(item => !item || typeof item !== "object")) throw new Error("Incomplete provider inventory");
     result.push(...page.items.map(record));
-    const total = typeof page.total === "number" ? page.total : undefined;
-    if (page.items.length < 100 && total !== undefined && result.length < total) throw new Error("Incomplete provider inventory");
-    if (page.items.length < 100 && (total === undefined || result.length >= total)) return result;
+    const total = typeof page.total_count === "number" ? page.total_count : typeof page.total === "number" ? page.total : undefined;
+    if (total !== undefined && (!Number.isSafeInteger(total) || total < 0)) throw new Error("Incomplete provider inventory");
     if (total !== undefined && result.length >= total) return result;
-    if (!page.items.length) throw new Error("Incomplete provider inventory");
+    // Arcade returns the next offset, which can advance after a short page.
+    if (page.offset !== undefined) {
+      if (page.offset === 0 && total === undefined) return result;
+      if (!page.items.length || !Number.isSafeInteger(page.offset) || Number(page.offset) <= offset) throw new Error("Incomplete provider inventory");
+      offset = Number(page.offset);
+    } else {
+      if (page.items.length < 100) {
+        if (total !== undefined) throw new Error("Incomplete provider inventory");
+        return result;
+      }
+      offset += 100;
+    }
   }
   throw new Error("Provider inventory exceeded the discovery limit");
 }
