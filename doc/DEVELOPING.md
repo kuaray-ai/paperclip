@@ -157,6 +157,8 @@ checkout, including a non-primary checkout. Changing projects clears the
 previous worktree choice. Switching from reuse to a new worktree or the project
 workspace restores the project default checkout. Task creation uses the selected company and has
 no separate heading or settings control.
+Clicking or tapping outside either selector dismisses it and preserves the task
+draft and selections. Mobile sheets return focus to the trigger without reopening.
 Stories cover empty and prefilled drafts, sub-tasks, planning, files, saving,
 retryable failures, creation, light theme, and mobile, plus worktree reuse,
 loading, empty, error, and isolation-disabled states. Story submissions use local

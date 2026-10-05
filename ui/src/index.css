@@ -3163,7 +3163,9 @@ span.paperclip-mention-chip[data-mention-kind="external-object"] {
     position: absolute;
     inset: 0;
     background: var(--mobile-entity-picker-backdrop);
-    pointer-events: none;
+    /* Hit the popper wrapper so Radix dismisses this sheet, while the parent
+       task dialog recognizes the tap as belonging to its nested picker. */
+    pointer-events: auto;
   }
 
   [data-mobile-entity-picker] {

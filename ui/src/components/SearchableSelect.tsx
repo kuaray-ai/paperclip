@@ -260,6 +260,12 @@ export function SearchableSelect<
             closePopover({ suppressTriggerFocus: true });
           }
         }}
+        onCloseAutoFocus={() => {
+          // Modal outside dismissal restores focus to the trigger. Keep that
+          // restore from reopening the picker, without swallowing a later Tab.
+          suppressNextTriggerFocusRef.current = true;
+          queueMicrotask(() => { suppressNextTriggerFocusRef.current = false; });
+        }}
       >
         <div data-mobile-entity-picker-header="" className="hidden items-center justify-between border-b border-border px-4 py-3">
           <span className="text-base font-semibold text-foreground">{mobileTitle ?? placeholder}</span>
