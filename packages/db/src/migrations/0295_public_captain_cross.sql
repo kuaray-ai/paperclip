@@ -1,4 +1,4 @@
-CREATE TABLE "tool_connection_app_snapshots" (
+CREATE TABLE IF NOT EXISTS "tool_connection_app_snapshots" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"company_id" uuid NOT NULL,
 	"connection_id" uuid NOT NULL,
@@ -10,6 +10,12 @@ CREATE TABLE "tool_connection_app_snapshots" (
 	"checked_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "tool_connection_app_snapshots" ADD CONSTRAINT "tool_connection_app_snapshots_company_id_companies_id_fk" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "tool_connection_app_snapshots" ADD CONSTRAINT "tool_connection_app_snapshots_company_connection_fk" FOREIGN KEY ("company_id","connection_id") REFERENCES "public"."tool_connections"("company_id","id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "tool_connection_app_snapshots_owner_toolkit_uq" ON "tool_connection_app_snapshots" USING btree ("company_id","connection_id","user_id","toolkit");
+DO $$ BEGIN
+	ALTER TABLE "tool_connection_app_snapshots" ADD CONSTRAINT "tool_connection_app_snapshots_company_id_companies_id_fk" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;--> statement-breakpoint
+DO $$ BEGIN
+	ALTER TABLE "tool_connection_app_snapshots" ADD CONSTRAINT "tool_connection_app_snapshots_company_connection_fk" FOREIGN KEY ("company_id","connection_id") REFERENCES "public"."tool_connections"("company_id","id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "tool_connection_app_snapshots_owner_toolkit_uq" ON "tool_connection_app_snapshots" USING btree ("company_id","connection_id","user_id","toolkit");

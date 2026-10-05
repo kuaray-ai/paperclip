@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { readFile } from "node:fs/promises";
+import { eq, sql } from "drizzle-orm";
 import express from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -52,6 +53,19 @@ if (!support.supported) console.warn(`Managed-account database tests unavailable
     await vi.waitFor(async () => { result = await f.access.listAggregatorApps(f.connection.id, f.actor); expect(result.sync.status).not.toBe("syncing"); }, { timeout: 5000 });
     return result;
   }
+  it("replays the account migrations without losing observations or weakening company boundaries", async () => {
+    const f = await fixture();
+    await sync(f);
+    const before = await db.select().from(toolConnectionAppSnapshots).where(eq(toolConnectionAppSnapshots.connectionId, f.connection.id));
+    for (const name of ["0295_public_captain_cross", "0296_stiff_thaddeus_ross"]) {
+      const migration = await readFile(new URL(`../../../packages/db/src/migrations/${name}.sql`, import.meta.url), "utf8");
+      for (const statement of migration.split("--> statement-breakpoint")) await db.execute(sql.raw(statement));
+    }
+    expect(await db.select().from(toolConnectionAppSnapshots).where(eq(toolConnectionAppSnapshots.connectionId, f.connection.id))).toEqual(before);
+    const other = await fixture();
+    await expect(db.insert(toolConnectionAppSnapshots).values({ companyId: other.company.id, connectionId: f.connection.id,
+      userId: other.actor.actorId, credentialKey: "different", toolkit: "notion", status: "connected", accounts: [] })).rejects.toThrow();
+  });
   it("imports and reconciles Executor accounts without new executable connections or access grants", async () => {
     const f = await fixture();
     const grants = await db.select().from(connectionGrants).where(eq(connectionGrants.connectionId, f.connection.id));
