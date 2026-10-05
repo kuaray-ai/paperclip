@@ -154,7 +154,8 @@ shows project colors. Worktrees sits beside Project when the selected project ha
 isolation enabled. Choose a new worktree, reuse an eligible worktree from that
 project, or keep the shared project workspace. Reuse carries the worktree's source
 checkout, including a non-primary checkout. Changing projects clears the
-previous worktree choice. Task creation uses the selected company and has
+previous worktree choice. Switching from reuse to a new worktree or the project
+workspace restores the project default checkout. Task creation uses the selected company and has
 no separate heading or settings control.
 Stories cover empty and prefilled drafts, sub-tasks, planning, files, saving,
 retryable failures, creation, light theme, and mobile, plus worktree reuse,

@@ -17,7 +17,7 @@ const COMPANY_ID = "company-storybook";
 const REQUEST = "Review the sign-in flow and fix the redirect after a session expires.";
 const WORKTREES = [
   { ...storybookExecutionWorkspaces[0]!, name: "Sign-in redirect", branchName: "codex/sign-in-redirect" },
-  { ...storybookExecutionWorkspaces[0]!, id: "worktree-settings", name: "Settings polish", branchName: "codex/settings-polish", cwd: `${storybookExecutionWorkspaces[0]!.cwd}-settings` },
+  { ...storybookExecutionWorkspaces[0]!, id: "worktree-settings", name: "Settings polish", branchName: "codex/settings-polish", projectWorkspaceId: "workspace-release-local", cwd: `${storybookExecutionWorkspaces[0]!.cwd}-settings` },
 ];
 
 function NewTaskStory({
@@ -153,6 +153,7 @@ function NewTaskStory({
           <p>{String(submitted.description ?? submitted.title)}</p>
           <p>Mode: {String(submitted.workMode)}</p>
           <p>Worktrees: {String(submitted.executionWorkspacePreference ?? "Project default")}</p>
+          <p>Checkout: {String(submitted.projectWorkspaceId ?? "None")}</p>
           {submitted.executionWorkspaceId ? <p>Reused: {String(submitted.executionWorkspaceId)}</p> : null}
         </div>
       ) : null}
@@ -301,6 +302,21 @@ export const CreateWithReusedWorktree: Story = {
     await userEvent.click(page.getByRole("button", { name: "Create task" }));
     await expect(await page.findByRole("status")).toHaveTextContent("Worktrees: reuse_existing");
     await expect(page.getByRole("status")).toHaveTextContent("Reused: worktree-settings");
+    await expect(page.getByRole("status")).toHaveTextContent("Checkout: workspace-release-local");
+  },
+};
+export const NewWorktreeAfterReuse: Story = {
+  args: { scenario: "prefilled" },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await page.findByRole("combobox", { name: "Worktrees" }));
+    await userEvent.click(await page.findByRole("option", { name: /Settings polish/ }));
+    await userEvent.click(page.getByRole("combobox", { name: "Worktrees" }));
+    await userEvent.click(page.getByRole("option", { name: /New worktree/ }));
+    await userEvent.click(page.getByRole("button", { name: "Create task" }));
+    await expect(await page.findByRole("status")).toHaveTextContent("Worktrees: isolated_workspace");
+    await expect(page.getByRole("status")).toHaveTextContent("Checkout: workspace-board-ui");
+    await expect(page.getByRole("status")).not.toHaveTextContent("Reused:");
   },
 };
 export const EmptyWorktrees: Story = { ...WorktreePicker, args: { scenario: "prefilled", worktrees: "empty" }, play: async ({ canvasElement }) => {

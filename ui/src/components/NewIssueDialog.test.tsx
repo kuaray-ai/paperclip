@@ -877,20 +877,20 @@ describe("NewIssueDialog", () => {
     act(() => root.unmount());
   });
 
-  it("creates a new worktree and clears the previously reused id", async () => {
+  it.each(["isolated_workspace", "shared_workspace"])("restores the project checkout and clears reuse when choosing %s", async (mode) => {
     enableWorktrees();
-    dialogState.newIssueDefaults.executionWorkspaceId = "worktree-1";
     mockExecutionWorkspacesApi.listSummaries.mockResolvedValue([{
       id: "worktree-1", name: "Sign-in fix", mode: "isolated_workspace", status: "idle",
-      branchName: "fix/sign-in", cwd: "/tmp/worktree-1", projectWorkspaceId: "source-1", lastUsedAt: new Date(),
+      branchName: "fix/sign-in", cwd: "/tmp/worktree-1", projectWorkspaceId: "source-2", lastUsedAt: new Date(),
     }]);
     const { root } = renderDialog(container);
-    await flush();
-    selectWorktree("isolated_workspace");
+    await waitForAssertion(() => expect(container.querySelector('[cmdk-item][data-value="reuse:worktree-1"]')).not.toBeNull());
+    selectWorktree("reuse:worktree-1");
+    selectWorktree(mode);
     act(() => container.querySelector<HTMLButtonElement>('[aria-label="Create task"]')!.click());
     await waitForAssertion(() => expect(mockIssuesApi.create).toHaveBeenCalled());
     const payload = mockIssuesApi.create.mock.calls[0][1];
-    expect(payload).toMatchObject({ executionWorkspacePreference: "isolated_workspace", executionWorkspaceSettings: { mode: "isolated_workspace" } });
+    expect(payload).toMatchObject({ projectWorkspaceId: "source-1", executionWorkspacePreference: mode, executionWorkspaceSettings: { mode } });
     expect(payload).not.toHaveProperty("executionWorkspaceId");
     act(() => root.unmount());
   });

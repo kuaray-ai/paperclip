@@ -1310,6 +1310,8 @@ export function NewIssueDialog() {
                           if (workspaceId) {
                             const workspace = selectableReusableWorkspaces.find((entry) => entry.id === workspaceId);
                             if (workspace) setProjectWorkspaceId(workspace.projectWorkspaceId ?? "");
+                          } else {
+                            setProjectWorkspaceId(defaultProjectWorkspaceIdForProject(currentProject));
                           }
                         }}
                         loading={worktreesLoading}
