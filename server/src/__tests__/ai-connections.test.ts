@@ -165,6 +165,21 @@ describe("managed AI connections", () => {
       } finally { fetchSpy.mockRestore(); }
     });
 
+    it("restores a grant that a parallel refusal marked when the renewal is saved", async () => {
+      const { row } = await connect("Restore account", storedLogin());
+      // The state a second process leaves when its refusal lands before this renewal is saved.
+      await db.update(connectionGrants).set({ status: "needs_reauthorization" }).where(eq(connectionGrants.id, row.grant.id));
+      await db.update(toolConnections).set({ healthStatus: "error", healthMessage: "The Claude subscription refresh token was refused. Sign in again to restore this AI connection." }).where(eq(toolConnections.id, row.connection.id));
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ access_token: "saved-access", refresh_token: "saved-refresh", expires_in: 28800 })));
+      try {
+        expect(await service.credential(row)).toBe("saved-access");
+        const [grant] = await db.select().from(connectionGrants).where(eq(connectionGrants.id, row.grant.id));
+        const [connection] = await db.select().from(toolConnections).where(eq(toolConnections.id, row.connection.id));
+        expect(grant!.status).toBe("active");
+        expect(connection!.healthStatus).toBe("ok");
+      } finally { fetchSpy.mockRestore(); }
+    });
+
     it("ignores a late authentication failure from a token that was renewed meanwhile", async () => {
       const { row } = await connect("Late failure account", storedLogin());
       const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ access_token: "newer-access", expires_in: 28800 })));

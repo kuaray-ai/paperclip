@@ -50,6 +50,7 @@ function canUseCredential(
   );
 }
 
+const CLAUDE_REFRESH_REFUSED_MESSAGE = "The Claude subscription refresh token was refused. Sign in again to restore this AI connection.";
 const CLAUDE_REFUSAL_RECHECKS = 3;
 const CLAUDE_REFUSAL_RECHECK_MS = 1000;
 const claudeRefreshQueues = new Map<string, Promise<unknown>>();
@@ -502,11 +503,14 @@ export function aiConnectionService(db: Db) {
             return attempted;
           },
           // A refresh is not a new login: keep the session epoch.
-          writeRaw: (value) => secretService(db).rotate(
-            ref.secretId,
-            { value, preserveAiSessionEpoch: true, ...(version !== undefined ? { expectedLatestVersion: version } : {}) },
-            { userId: row.grant.subjectUserId },
-          ),
+          writeRaw: async (value) => {
+            await secretService(db).rotate(
+              ref.secretId,
+              { value, preserveAiSessionEpoch: true, ...(version !== undefined ? { expectedLatestVersion: version } : {}) },
+              { userId: row.grant.subjectUserId },
+            );
+            await restoreAfterRefusedRefresh(row);
+          },
         })),
       });
     } catch (error) {
@@ -536,6 +540,21 @@ export function aiConnectionService(db: Db) {
     }
   }
   /**
+   * A renewal succeeded. Undo a refusal that another process recorded while this
+   * renewal was still in flight. Only a mark made by the refusal path is undone.
+   */
+  async function restoreAfterRefusedRefresh(row: Pick<Awaited<ReturnType<typeof select>>, "connection" | "grant">) {
+    await db.transaction(async (tx) => {
+      const [connection] = await tx.select({ healthMessage: toolConnections.healthMessage }).from(toolConnections)
+        .where(eq(toolConnections.id, row.connection.id)).for("update");
+      if (connection?.healthMessage !== CLAUDE_REFRESH_REFUSED_MESSAGE) return;
+      await tx.update(connectionGrants).set({ status: "active", updatedAt: new Date() })
+        .where(and(eq(connectionGrants.id, row.grant.id), eq(connectionGrants.status, "needs_reauthorization")));
+      await tx.update(toolConnections).set({ healthStatus: "ok", healthMessage: null, updatedAt: new Date() })
+        .where(eq(toolConnections.id, row.connection.id));
+    });
+  }
+  /**
    * The provider refused the refresh token. Mark the grant as needing sign-in,
    * but only if the stored credential is still the one that was refused. A
    * reconnect or another renewal in the meantime keeps the grant healthy.
@@ -559,7 +578,7 @@ export function aiConnectionService(db: Db) {
       if (!refusedToken || parseClaudeOauthCredential(current)?.claudeAiOauth.refreshToken !== refusedToken) return;
       await tx.update(connectionGrants).set({ status: "needs_reauthorization", updatedAt: new Date() })
         .where(eq(connectionGrants.id, grant.id));
-      await tx.update(toolConnections).set({ healthStatus: "error", healthMessage: "Sign in again to restore this AI connection.", updatedAt: new Date() })
+      await tx.update(toolConnections).set({ healthStatus: "error", healthMessage: CLAUDE_REFRESH_REFUSED_MESSAGE, updatedAt: new Date() })
         .where(eq(toolConnections.id, row.connection.id));
       await logActivity(tx as unknown as Db, {
         companyId: row.connection.companyId, actorType: "system", actorId: "ai_credential_refresh",
