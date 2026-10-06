@@ -126,6 +126,20 @@ describe("managed AI connections", () => {
       } finally { fetchSpy.mockRestore(); }
     });
 
+    it("uses the reconnected credential when a reconnect lands during a refresh", async () => {
+      const { row, secretId } = await connect("Reconnect race account", storedLogin());
+      // A second pool stands for another server request; the first pool may be small.
+      const other = createDb(database.connectionString);
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        await secretService(other).rotate(secretId, { value: storedLogin({ accessToken: "reconnected-access", expiresAt: Date.now() + 8 * 3600_000 }) }, { userId: "claude-refresh-owner" });
+        return new Response(JSON.stringify({ access_token: "discarded-access", refresh_token: "discarded-refresh", expires_in: 28800 }));
+      });
+      try {
+        expect(await service.credential(row)).toBe("reconnected-access");
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+      } finally { fetchSpy.mockRestore(); }
+    });
+
     it("marks the grant as needing sign-in when the provider refuses the refresh token", async () => {
       const { row } = await connect("Refused account", storedLogin());
       const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }));

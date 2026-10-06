@@ -261,15 +261,15 @@ export async function prepareManagedAiRuntime(
     if (!credentialRef) throw unprocessable("The selected AI credential is unavailable");
     const readFreshness = async () => (await db.select({ epoch: companySecrets.aiSessionEpoch, version: companySecrets.latestVersion })
       .from(companySecrets).where(and(eq(companySecrets.companyId, input.companyId), eq(companySecrets.id, credentialRef.secretId))).limit(1))[0];
-    // A Claude token refresh writes a new secret version, so the version
-    // baseline must come after the single credential() call. The check below
-    // still guards the rest of the preparation.
     const refreshesToken = input.binding.provider === "anthropic" && selection.attribution.method === "subscription";
-    const baseline = refreshesToken ? undefined : await readFreshness();
+    const freshness = await readFreshness();
     const value = await service.credential(selection);
-    const freshness = baseline ?? await readFreshness();
     const afterRead = await readFreshness();
-    if (!freshness || freshness.version !== afterRead?.version || freshness.epoch !== afterRead.epoch) throw unprocessable("The AI credential changed during preparation; retry this execution");
+    // A Claude token refresh writes a new version but keeps the session epoch.
+    // A reconnect changes the epoch, so the epoch alone detects it.
+    const changed = !freshness || !afterRead || freshness.epoch !== afterRead.epoch ||
+      (!refreshesToken && freshness.version !== afterRead.version);
+    if (changed) throw unprocessable("The AI credential changed during preparation; retry this execution");
     home = await mkdtemp(
       path.join(
         os.tmpdir(),
