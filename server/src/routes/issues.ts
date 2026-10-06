@@ -6482,11 +6482,35 @@ export function issueRoutes(
     return false;
   }
 
+  /**
+   * Unresolved blockers that decide whether an issue may resume. When the
+   * request sets `blockedByIssueIds` (including `[]`), those ids replace the
+   * stored blockers once the request is applied, so they are the ones to judge.
+   * Without that field, the stored blockers apply.
+   */
+  async function listEffectiveUnresolvedBlockerIssueIds(
+    issue: { id: string; companyId: string },
+    requestedBlockerIssueIds?: string[],
+  ) {
+    if (requestedBlockerIssueIds) {
+      if (requestedBlockerIssueIds.length === 0) return [];
+      return svc.listUnresolvedBlockerIssueIds(
+        issue.companyId,
+        requestedBlockerIssueIds.filter((id) => typeof id === "string"),
+      );
+    }
+    return (await svc.getDependencyReadiness(issue.id)).unresolvedBlockerIssueIds;
+  }
+
   async function assertExplicitResumeIntentAllowed(
     req: Request,
     res: Response,
     issue: Parameters<typeof decideIssueAccess>[1],
-    options: { resumeIntent?: boolean } = {},
+    options: {
+      resumeIntent?: boolean;
+      /** Blockers the same request sets; they replace the stored ones. */
+      requestedBlockerIssueIds?: string[];
+    } = {},
   ) {
     if (
       await assertLowTrustControlPlaneDenied(req, res, issue.companyId, issue)
@@ -6534,13 +6558,18 @@ export function issueRoutes(
     }
 
     if (issue.status === "blocked") {
-      const readiness = await svc.getDependencyReadiness(issue.id);
-      if (readiness.unresolvedBlockerCount > 0) {
+      const unresolvedBlockerIssueIds = await listEffectiveUnresolvedBlockerIssueIds(
+        issue,
+        options.requestedBlockerIssueIds,
+      );
+      if (unresolvedBlockerIssueIds.length > 0) {
         res.status(409).json({
           error: "Issue follow-up blocked by unresolved blockers",
           details: {
             issueId: issue.id,
-            unresolvedBlockerIssueIds: readiness.unresolvedBlockerIssueIds,
+            unresolvedBlockerIssueIds,
+            remediation:
+              "Complete the listed blockers, or send blockedByIssueIds without them in the same request.",
           },
         });
         return false;
@@ -12945,6 +12974,9 @@ export function issueRoutes(
         resumeRequested === true &&
         !(await assertExplicitResumeIntentAllowed(req, res, existing, {
           resumeIntent: true,
+          requestedBlockerIssueIds: Array.isArray(req.body.blockedByIssueIds)
+            ? (req.body.blockedByIssueIds as string[])
+            : undefined,
         }))
       )
         return;
@@ -13053,19 +13085,31 @@ export function issueRoutes(
       const updateReferenceSummaryBefore = titleOrDescriptionChanged
         ? await issueReferencesSvc.listIssueReferenceSummary(existing.id)
         : null;
-      const hasUnresolvedFirstClassBlockers =
+      const unresolvedFirstClassBlockerIssueIds =
         isBlocked && effectiveMoveToTodoRequested
-          ? (await svc.getDependencyReadiness(existing.id))
-              .unresolvedBlockerCount > 0
-          : false;
+          ? await listEffectiveUnresolvedBlockerIssueIds(
+              existing,
+              Array.isArray(req.body.blockedByIssueIds)
+                ? (req.body.blockedByIssueIds as string[])
+                : undefined,
+            )
+          : [];
+      const hasUnresolvedFirstClassBlockers =
+        unresolvedFirstClassBlockerIssueIds.length > 0;
       if (
         resumeRequested === true &&
         isBlocked &&
         hasUnresolvedFirstClassBlockers
       ) {
-        res
-          .status(409)
-          .json({ error: "Issue follow-up blocked by unresolved blockers" });
+        res.status(409).json({
+          error: "Issue follow-up blocked by unresolved blockers",
+          details: {
+            issueId: existing.id,
+            unresolvedBlockerIssueIds: unresolvedFirstClassBlockerIssueIds,
+            remediation:
+              "Complete the listed blockers, or send blockedByIssueIds without them in the same request.",
+          },
+        });
         return;
       }
       let interruptedRunId: string | null = null;

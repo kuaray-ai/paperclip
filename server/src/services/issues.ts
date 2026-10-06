@@ -9070,6 +9070,17 @@ export function issueService(db: Db) {
       };
     },
 
+    /**
+     * Of the given blocker ids, returns the ones that still block (not done).
+     * Callers use it to judge the blockers a request is about to set, before
+     * the request is applied.
+     */
+    listUnresolvedBlockerIssueIds: (
+      companyId: string,
+      blockerIssueIds: string[],
+    ): Promise<string[]> =>
+      listUnresolvedBlockerIssueIds(db, companyId, blockerIssueIds),
+
     getDependencyReadiness: async (issueId: string, dbOrTx: any = db) => {
       const issue = await dbOrTx
         .select({ id: issues.id, companyId: issues.companyId })
