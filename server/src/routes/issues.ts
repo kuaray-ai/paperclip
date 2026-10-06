@@ -6569,7 +6569,7 @@ export function issueRoutes(
             issueId: issue.id,
             unresolvedBlockerIssueIds,
             remediation:
-              "Complete the listed blockers, or send blockedByIssueIds without them in the same request.",
+              "Complete the listed blockers, or clear them with PATCH /api/issues/:id and a blockedByIssueIds list that omits them.",
           },
         });
         return false;
@@ -13107,7 +13107,7 @@ export function issueRoutes(
             issueId: existing.id,
             unresolvedBlockerIssueIds: unresolvedFirstClassBlockerIssueIds,
             remediation:
-              "Complete the listed blockers, or send blockedByIssueIds without them in the same request.",
+              "Complete the listed blockers, or clear them with PATCH /api/issues/:id and a blockedByIssueIds list that omits them.",
           },
         });
         return;

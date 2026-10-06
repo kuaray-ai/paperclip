@@ -2048,6 +2048,11 @@ describe.sequential("issue comment reopen routes", () => {
         .send({ comment: "blocker is obsolete", resume: true, blockedByIssueIds: [] });
 
       expect(res.status).toBe(200);
+      expect(res.body.status).toBe("todo");
+      expect(mockIssueService.update).toHaveBeenCalledWith(
+        issueId,
+        expect.objectContaining({ status: "todo", blockedByIssueIds: [] }),
+      );
       expect(mockIssueService.listUnresolvedBlockerIssueIds).not.toHaveBeenCalled();
     });
 
