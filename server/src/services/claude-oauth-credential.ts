@@ -45,6 +45,11 @@ export function parseClaudeOauthCredential(raw: string): ClaudeOauthCredential |
   return parsed as ClaudeOauthCredential;
 }
 
+/** The token a run injects for a stored value: the access token, or the plain token itself. */
+export function claudeAccessTokenOf(raw: string): string {
+  return parseClaudeOauthCredential(raw)?.claudeAiOauth.accessToken ?? raw;
+}
+
 /**
  * The value to store at connect time. Keeps only the OAuth fields. Returns
  * null when there is no refresh token or expiry, so the caller keeps the

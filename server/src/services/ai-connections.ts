@@ -1,6 +1,6 @@
 import { syncConnectionCredentialBindings } from "./connection-credential-bindings.js";
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import {
   type Db,
   authUsers,
@@ -35,7 +35,7 @@ import { forbidden, notFound, unprocessable } from "../errors.js";
 import { logActivity } from "./activity-log.js";
 import { secretService } from "./secrets.js";
 import { probeAiConnectionUsage } from "./ai-connection-usage.js";
-import { ClaudeOauthRefreshError, resolveClaudeAccessToken } from "./claude-oauth-credential.js";
+import { ClaudeOauthRefreshError, claudeAccessTokenOf, parseClaudeOauthCredential, resolveClaudeAccessToken } from "./claude-oauth-credential.js";
 
 /** Same human audience displayed by the existing Connections identity controls. */
 function canUseCredential(
@@ -468,28 +468,44 @@ export function aiConnectionService(db: Db) {
     if (!metadata.success || metadata.data.provider !== "anthropic" || metadata.data.method !== "subscription") return raw;
     const ref = row.grant.credentialSecretRefs.find((r) => r.configPath === "ai.credential");
     if (!ref) return raw;
+    let attempted = raw;
+    let version: number | undefined;
     try {
       return await resolveClaudeAccessToken(raw, {
+        // An advisory lock serializes refreshes of one secret. Rotation and
+        // reconnect never take it, and this code holds no row lock while it
+        // calls rotate(), so the lock order of rotate() is not changed.
         withLock: (fn) => db.transaction(async (tx) => {
-          await tx
-            .select({ id: companySecrets.id })
-            .from(companySecrets)
-            .where(and(eq(companySecrets.id, ref.secretId), eq(companySecrets.companyId, row.connection.companyId)))
-            .for("update");
-          const txService = aiConnectionService(tx as unknown as Db);
+          await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${ref.secretId}, 0))`);
           return fn({
-            readRaw: () => txService.credentialRaw(row),
-            // A refresh is not a new login: keep the session epoch.
-            writeRaw: (value) => secretService(tx as unknown as Db).rotate(
-              ref.secretId,
-              { value, preserveAiSessionEpoch: true },
-              { userId: row.grant.subjectUserId },
-            ),
+            readRaw: async () => {
+              const [secret] = await db
+                .select({ latestVersion: companySecrets.latestVersion })
+                .from(companySecrets)
+                .where(and(eq(companySecrets.id, ref.secretId), eq(companySecrets.companyId, row.connection.companyId)));
+              version = secret?.latestVersion;
+              attempted = await credentialRaw(row);
+              return attempted;
+            },
+            // A refresh is not a new login: keep the session epoch. A stale
+            // version means a reconnect won the race; its credential stays.
+            writeRaw: async (value) => {
+              try {
+                await secretService(db).rotate(
+                  ref.secretId,
+                  { value, preserveAiSessionEpoch: true, ...(version !== undefined ? { expectedLatestVersion: version } : {}) },
+                  { userId: row.grant.subjectUserId },
+                );
+              } catch (error) {
+                if ((error as { status?: number })?.status !== 409) throw error;
+              }
+            },
           });
         }),
       });
     } catch (error) {
       if (error instanceof ClaudeOauthRefreshError) {
+        if (error.rejected) await markRefreshRefused(row, ref.secretId, attempted);
         throw unprocessable(
           error.rejected ? "Reconnect this AI account" : "The Claude subscription token could not be refreshed. Try again.",
           {
@@ -502,18 +518,38 @@ export function aiConnectionService(db: Db) {
     }
   }
   /**
-   * Stable identity of the credential. A Claude subscription token changes on
-   * every refresh, so its identity follows the grant, which changes on reconnect.
+   * The provider refused the refresh token. Mark the grant as needing sign-in,
+   * but only if the stored credential is still the one that was refused. A
+   * reconnect or another renewal in the meantime keeps the grant healthy.
    */
-  function credentialGeneration(
+  async function markRefreshRefused(
     row: Pick<Awaited<ReturnType<typeof select>>, "connection" | "grant">,
-    value: string,
+    secretId: string,
+    refused: string,
   ) {
-    const metadata = aiConnectionMetadataSchema.safeParse(row.connection.config?.ai);
-    const material = metadata.success && metadata.data.provider === "anthropic" && metadata.data.method === "subscription"
-      ? `claude-subscription:${row.grant.id}:${new Date(row.grant.updatedAt).getTime()}`
-      : value;
-    return createHash("sha256").update(material).digest("hex").slice(0, 16);
+    await db.transaction(async (tx) => {
+      const [grant] = await tx.select().from(connectionGrants).where(and(
+        eq(connectionGrants.companyId, row.connection.companyId),
+        eq(connectionGrants.id, row.grant.id),
+      )).for("update");
+      if (!grant || grant.status !== "active") return;
+      await tx.select({ id: companySecrets.id }).from(companySecrets).where(and(
+        eq(companySecrets.companyId, row.connection.companyId), eq(companySecrets.id, secretId),
+      )).for("update");
+      const current = await aiConnectionService(tx as unknown as Db).credentialRaw({ connection: row.connection, grant });
+      const refusedToken = parseClaudeOauthCredential(refused)?.claudeAiOauth.refreshToken;
+      if (!refusedToken || parseClaudeOauthCredential(current)?.claudeAiOauth.refreshToken !== refusedToken) return;
+      await tx.update(connectionGrants).set({ status: "needs_reauthorization", updatedAt: new Date() })
+        .where(eq(connectionGrants.id, grant.id));
+      await tx.update(toolConnections).set({ healthStatus: "error", healthMessage: "Sign in again to restore this AI connection.", updatedAt: new Date() })
+        .where(eq(toolConnections.id, row.connection.id));
+      await logActivity(tx as unknown as Db, {
+        companyId: row.connection.companyId, actorType: "system", actorId: "ai_credential_refresh",
+        action: "ai_connection.authentication_failed",
+        entityType: "tool_connection", entityId: row.connection.id,
+        details: { provider: "anthropic", grantId: grant.id },
+      });
+    });
   }
   async function save(
     companyId: string,
@@ -892,9 +928,11 @@ export function aiConnectionService(db: Db) {
       await tx.select({ id: companySecrets.id }).from(companySecrets).where(and(
         eq(companySecrets.companyId, input.companyId), eq(companySecrets.id, ref.secretId),
       )).for("update");
-      const txService = aiConnectionService(tx as unknown as Db);
-      const value = await txService.credentialRaw({ connection, grant });
-      const generation = txService.credentialGeneration({ connection, grant }, value);
+      // The run injected the access token, so the identity hashes that token.
+      // After a renewal the old token no longer matches, and a late failure is ignored.
+      const raw = await aiConnectionService(tx as unknown as Db).credentialRaw({ connection, grant });
+      const value = claudeAccessTokenOf(raw);
+      const generation = createHash("sha256").update(value).digest("hex").slice(0, 16);
       if (attribution.identity !== `${grant.id}:${attribution.responsibleUserId ?? "shared"}:${generation}`) return;
       await tx.update(connectionGrants).set({ status: "needs_reauthorization", updatedAt: new Date() })
         .where(eq(connectionGrants.id, grant.id));
@@ -908,5 +946,5 @@ export function aiConnectionService(db: Db) {
       });
     });
   }
-  return { list, select, credential, credentialRaw, credentialGeneration, probeUsage, save, setDefault, membership, markAuthenticationFailed };
+  return { list, select, credential, credentialRaw, probeUsage, save, setDefault, membership, markAuthenticationFailed };
 }

@@ -3,7 +3,7 @@ import { connectionIntentDeliveryService } from "../services/connection-intent-d
 import { issueRecoveryActionService } from "../services/issue-recovery-actions.js";
 import * as localCredentials from "../services/local-ai-credentials.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm, access, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -94,6 +94,60 @@ describe("managed AI connections", () => {
       expect(revoked.body).toMatchObject({ status: "unavailable", errorCode: "connection_unavailable", limits: [] });
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally { fetchSpy.mockRestore(); }
+  });
+
+  describe("Claude subscription token refresh", () => {
+    const storedLogin = (over: Record<string, unknown> = {}) => JSON.stringify({
+      claudeAiOauth: { accessToken: "old-access", refreshToken: "old-refresh", expiresAt: Date.now() + 60_000, scopes: ["user:inference"], ...over },
+    });
+    const connect = async (name: string, value: string) => {
+      const owner = "claude-refresh-owner";
+      await db.insert(companyMemberships).values({ companyId, principalId: owner, principalType: "user", status: "active", membershipRole: "member" }).onConflictDoNothing();
+      const account = await service.save(companyId, owner, { provider: "anthropic", method: "subscription", ownership: "personal", name, loginSessionId: "fixture", agentIds: [], allAgents: true }, value);
+      const [connection] = await db.select().from(toolConnections).where(eq(toolConnections.id, account.connectionId));
+      const [grant] = await db.select().from(connectionGrants).where(eq(connectionGrants.id, account.grantId));
+      const secretId = grant!.credentialSecretRefs.find((ref) => ref.configPath === "ai.credential")!.secretId;
+      return { row: { connection: connection!, grant: grant! }, secretId };
+    };
+    const readSecret = async (secretId: string) => (await db.select({ version: companySecrets.latestVersion, epoch: companySecrets.aiSessionEpoch }).from(companySecrets).where(eq(companySecrets.id, secretId)))[0]!;
+
+    it("renews an expiring token once, stores the rotated pair and keeps the session epoch", async () => {
+      const { row, secretId } = await connect("Refresh account", storedLogin());
+      const before = await readSecret(secretId);
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 28800 })));
+      try {
+        expect(await service.credential(row)).toBe("new-access");
+        expect(await service.credential(row)).toBe("new-access");
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        const after = await readSecret(secretId);
+        expect(after.version).toBe(before.version + 1);
+        expect(after.epoch).toBe(before.epoch);
+        expect(JSON.parse(await service.credentialRaw(row)).claudeAiOauth).toMatchObject({ accessToken: "new-access", refreshToken: "new-refresh" });
+      } finally { fetchSpy.mockRestore(); }
+    });
+
+    it("marks the grant as needing sign-in when the provider refuses the refresh token", async () => {
+      const { row } = await connect("Refused account", storedLogin());
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }));
+      try {
+        await expect(service.credential(row)).rejects.toMatchObject({ details: { code: "ai_connection_reauth_required" } });
+        const [grant] = await db.select().from(connectionGrants).where(eq(connectionGrants.id, row.grant.id));
+        expect(grant!.status).toBe("needs_reauthorization");
+      } finally { fetchSpy.mockRestore(); }
+    });
+
+    it("ignores a late authentication failure from a token that was renewed meanwhile", async () => {
+      const { row } = await connect("Late failure account", storedLogin());
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ access_token: "newer-access", expires_in: 28800 })));
+      try {
+        const oldToken = "old-access";
+        const identity = `${row.grant.id}:claude-refresh-owner:${createHash("sha256").update(oldToken).digest("hex").slice(0, 16)}`;
+        await service.credential(row);
+        await service.markAuthenticationFailed({ companyId, runStartedAt: new Date(Date.now() + 1000), attribution: { connectionId: row.connection.id, grantId: row.grant.id, provider: "anthropic", method: "subscription", mode: "responsible_user", responsibleUserId: "claude-refresh-owner", identity } as never });
+        const [grant] = await db.select().from(connectionGrants).where(eq(connectionGrants.id, row.grant.id));
+        expect(grant!.status).toBe("active");
+      } finally { fetchSpy.mockRestore(); }
+    });
   });
 
   it("uses the same usage probe for shared accounts across legacy and native runner selections", async () => {
