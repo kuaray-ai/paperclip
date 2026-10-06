@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { HttpError, unprocessable } from "../errors.js";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -261,6 +260,11 @@ export async function prepareManagedAiRuntime(
     if (!credentialRef) throw unprocessable("The selected AI credential is unavailable");
     const readFreshness = async () => (await db.select({ epoch: companySecrets.aiSessionEpoch, version: companySecrets.latestVersion })
       .from(companySecrets).where(and(eq(companySecrets.companyId, input.companyId), eq(companySecrets.id, credentialRef.secretId))).limit(1))[0];
+    // A Claude token refresh writes a new secret version. Do it before the
+    // freshness baseline, so the check below only sees changes made by others.
+    if (input.binding.provider === "anthropic" && selection.attribution.method === "subscription") {
+      await service.credential(selection);
+    }
     const freshness = await readFreshness();
     const value = await service.credential(selection);
     const afterRead = await readFreshness();
@@ -306,10 +310,7 @@ export async function prepareManagedAiRuntime(
       });
       env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
     }
-    const generation = createHash("sha256")
-      .update(value)
-      .digest("hex")
-      .slice(0, 16);
+    const generation = service.credentialGeneration(selection, value);
     const identity = `${selection.grant.id}:${input.responsibleUserId ?? "shared"}:${generation}`;
     const sessionIdentity = `${selection.grant.id}:${input.responsibleUserId ?? "shared"}:${credentialRef.secretId}:${freshness.epoch}`;
     return {

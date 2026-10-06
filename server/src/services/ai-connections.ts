@@ -35,6 +35,7 @@ import { forbidden, notFound, unprocessable } from "../errors.js";
 import { logActivity } from "./activity-log.js";
 import { secretService } from "./secrets.js";
 import { probeAiConnectionUsage } from "./ai-connection-usage.js";
+import { ClaudeOauthRefreshError, resolveClaudeAccessToken } from "./claude-oauth-credential.js";
 
 /** Same human audience displayed by the existing Connections identity controls. */
 function canUseCredential(
@@ -400,7 +401,7 @@ export function aiConnectionService(db: Db) {
       } satisfies AiConnectionAttribution,
     };
   }
-  async function credential(row: Pick<Awaited<ReturnType<typeof select>>, "connection" | "grant">) {
+  async function credentialRaw(row: Pick<Awaited<ReturnType<typeof select>>, "connection" | "grant">) {
     const ref = row.grant.credentialSecretRefs.find(
       (r) => r.configPath === "ai.credential",
     );
@@ -455,6 +456,64 @@ export function aiConnectionService(db: Db) {
       "latest",
       context,
     );
+  }
+  /**
+   * The credential to inject. A Claude subscription secret holds the full OAuth
+   * fields. This renews the access token under a lock on the secret row and
+   * returns only the access token. Other credentials are returned unchanged.
+   */
+  async function credential(row: Pick<Awaited<ReturnType<typeof select>>, "connection" | "grant">) {
+    const raw = await credentialRaw(row);
+    const metadata = aiConnectionMetadataSchema.safeParse(row.connection.config?.ai);
+    if (!metadata.success || metadata.data.provider !== "anthropic" || metadata.data.method !== "subscription") return raw;
+    const ref = row.grant.credentialSecretRefs.find((r) => r.configPath === "ai.credential");
+    if (!ref) return raw;
+    try {
+      return await resolveClaudeAccessToken(raw, {
+        withLock: (fn) => db.transaction(async (tx) => {
+          await tx
+            .select({ id: companySecrets.id })
+            .from(companySecrets)
+            .where(and(eq(companySecrets.id, ref.secretId), eq(companySecrets.companyId, row.connection.companyId)))
+            .for("update");
+          const txService = aiConnectionService(tx as unknown as Db);
+          return fn({
+            readRaw: () => txService.credentialRaw(row),
+            // A refresh is not a new login: keep the session epoch.
+            writeRaw: (value) => secretService(tx as unknown as Db).rotate(
+              ref.secretId,
+              { value, preserveAiSessionEpoch: true },
+              { userId: row.grant.subjectUserId },
+            ),
+          });
+        }),
+      });
+    } catch (error) {
+      if (error instanceof ClaudeOauthRefreshError) {
+        throw unprocessable(
+          error.rejected ? "Reconnect this AI account" : "The Claude subscription token could not be refreshed. Try again.",
+          {
+            code: error.rejected ? "ai_connection_reauth_required" : "ai_connection_refresh_unavailable",
+            reason: error.message,
+          },
+        );
+      }
+      throw error;
+    }
+  }
+  /**
+   * Stable identity of the credential. A Claude subscription token changes on
+   * every refresh, so its identity follows the grant, which changes on reconnect.
+   */
+  function credentialGeneration(
+    row: Pick<Awaited<ReturnType<typeof select>>, "connection" | "grant">,
+    value: string,
+  ) {
+    const metadata = aiConnectionMetadataSchema.safeParse(row.connection.config?.ai);
+    const material = metadata.success && metadata.data.provider === "anthropic" && metadata.data.method === "subscription"
+      ? `claude-subscription:${row.grant.id}:${new Date(row.grant.updatedAt).getTime()}`
+      : value;
+    return createHash("sha256").update(material).digest("hex").slice(0, 16);
   }
   async function save(
     companyId: string,
@@ -833,8 +892,9 @@ export function aiConnectionService(db: Db) {
       await tx.select({ id: companySecrets.id }).from(companySecrets).where(and(
         eq(companySecrets.companyId, input.companyId), eq(companySecrets.id, ref.secretId),
       )).for("update");
-      const value = await aiConnectionService(tx as unknown as Db).credential({ connection, grant });
-      const generation = createHash("sha256").update(value).digest("hex").slice(0, 16);
+      const txService = aiConnectionService(tx as unknown as Db);
+      const value = await txService.credentialRaw({ connection, grant });
+      const generation = txService.credentialGeneration({ connection, grant }, value);
       if (attribution.identity !== `${grant.id}:${attribution.responsibleUserId ?? "shared"}:${generation}`) return;
       await tx.update(connectionGrants).set({ status: "needs_reauthorization", updatedAt: new Date() })
         .where(eq(connectionGrants.id, grant.id));
@@ -848,5 +908,5 @@ export function aiConnectionService(db: Db) {
       });
     });
   }
-  return { list, select, credential, probeUsage, save, setDefault, membership, markAuthenticationFailed };
+  return { list, select, credential, credentialRaw, credentialGeneration, probeUsage, save, setDefault, membership, markAuthenticationFailed };
 }
