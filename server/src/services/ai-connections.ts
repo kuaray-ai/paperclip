@@ -545,6 +545,9 @@ export function aiConnectionService(db: Db) {
    */
   async function restoreAfterRefusedRefresh(row: Pick<Awaited<ReturnType<typeof select>>, "connection" | "grant">) {
     await db.transaction(async (tx) => {
+      // Lock the grant before the connection, like save() does.
+      await tx.select({ id: connectionGrants.id }).from(connectionGrants)
+        .where(eq(connectionGrants.id, row.grant.id)).for("update");
       const [connection] = await tx.select({ healthMessage: toolConnections.healthMessage }).from(toolConnections)
         .where(eq(toolConnections.id, row.connection.id)).for("update");
       if (connection?.healthMessage !== CLAUDE_REFRESH_REFUSED_MESSAGE) return;
