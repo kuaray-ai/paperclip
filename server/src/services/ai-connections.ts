@@ -50,6 +50,8 @@ function canUseCredential(
   );
 }
 
+const CLAUDE_REFUSAL_RECHECKS = 3;
+const CLAUDE_REFUSAL_RECHECK_MS = 1000;
 const claudeRefreshQueues = new Map<string, Promise<unknown>>();
 /** Run `fn` after earlier refreshes of the same secret finish. */
 function withClaudeRefreshMutex<T>(secretId: string, fn: () => Promise<T>): Promise<T> {
@@ -512,10 +514,14 @@ export function aiConnectionService(db: Db) {
       if ((error as { status?: number })?.status === 409 && retriesLeft > 0) return credential(row, retriesLeft - 1);
       if (error instanceof ClaudeOauthRefreshError) {
         if (error.rejected && retriesLeft > 0) {
-          // Another server process may have rotated the refresh token first. Start over with its value.
-          const current = parseClaudeOauthCredential(await credentialRaw(row))?.claudeAiOauth.refreshToken;
+          // Another server process may have rotated the refresh token first and
+          // not saved it yet. Wait a short time for its value before the refusal counts.
           const refused = parseClaudeOauthCredential(attempted)?.claudeAiOauth.refreshToken;
-          if (current && refused && current !== refused) return credential(row, retriesLeft - 1);
+          for (let poll = 0; poll < CLAUDE_REFUSAL_RECHECKS; poll++) {
+            const current = parseClaudeOauthCredential(await credentialRaw(row))?.claudeAiOauth.refreshToken;
+            if (current && refused && current !== refused) return credential(row, retriesLeft - 1);
+            await new Promise((resolve) => setTimeout(resolve, CLAUDE_REFUSAL_RECHECK_MS));
+          }
         }
         if (error.rejected) await markRefreshRefused(row, ref.secretId, attempted);
         throw unprocessable(

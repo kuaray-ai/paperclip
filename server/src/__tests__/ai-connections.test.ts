@@ -150,6 +150,21 @@ describe("managed AI connections", () => {
       } finally { fetchSpy.mockRestore(); }
     });
 
+    it("does not mark the grant when another process saves a rotated token during the refusal wait", async () => {
+      const { row, secretId } = await connect("Parallel refresh account", storedLogin());
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        setTimeout(() => {
+          void secretService(db).rotate(secretId, { value: storedLogin({ accessToken: "other-access", refreshToken: "other-refresh", expiresAt: Date.now() + 8 * 3600_000 }) }, { userId: "claude-refresh-owner" });
+        }, 300);
+        return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+      });
+      try {
+        expect(await service.credential(row)).toBe("other-access");
+        const [grant] = await db.select().from(connectionGrants).where(eq(connectionGrants.id, row.grant.id));
+        expect(grant!.status).toBe("active");
+      } finally { fetchSpy.mockRestore(); }
+    });
+
     it("ignores a late authentication failure from a token that was renewed meanwhile", async () => {
       const { row } = await connect("Late failure account", storedLogin());
       const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ access_token: "newer-access", expires_in: 28800 })));
